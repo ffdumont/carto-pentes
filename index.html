@@ -139,7 +139,6 @@
   <span class="chip"><span class="dot" id="gpsDot"></span>GPS <b id="gpsAcc">—</b></span>
   <span class="chip"><span class="dot" id="orientDot"></span>Inclin.</span>
   <span class="chip"><span class="dot" id="lockDot"></span>Écran</span>
-  <span class="chip" id="calibChip" style="display:none">⊙ calé</span>
   <span class="chip" id="statsChip">0 pt · 0 m</span>
 </div>
 
@@ -171,7 +170,6 @@
   <div class="hint" id="hint">En attente d'activation…</div>
 
   <div class="row">
-    <button class="ghost" id="zero" disabled>⊙ Zéro</button>
     <button class="ghost" id="mark" disabled>⚑ Marquer</button>
     <button class="ghost" id="center" disabled>⌖ Centrer</button>
   </div>
@@ -208,11 +206,11 @@ let gpsCourse = null, gpsSpeed = null, gpsMoving = false;
 let tiltAcc = null;
 function resetTiltAcc() { tiltAcc = { n: 0, roll: 0, roll2: 0, pitch: 0, beta: 0, gamma: 0 }; }
 
-// Orientation de référence (tare). Vecteur gravité (repère appareil) qui
-// correspond au « niveau 0° ». Par défaut : téléphone à plat écran vers le haut.
-// Après un appui sur « Zéro » : l'orientation de montage courante devient le 0°.
-let zeroG = [0, 0, -1];
-let lastG = null;         // dernier vecteur gravité mesuré (pour la tare)
+// Référence d'inclinaison = horizontale absolue (gravité). Les inclinomètres sont
+// déjà calibrés par rapport au châssis du téléphone (comme le niveau de l'app
+// Mesure d'Apple) : aucune tare nécessaire. Un éventuel défaut de montage est un
+// offset constant retiré en post-traitement.
+const DOWN = [0, 0, -1];
 
 // Note : l'axe « avant » exact du châssis (donc la séparation roulis/tangage) est
 // résolu en POST-TRAITEMENT, à partir des capteurs bruts (β/γ/compas) + du cap GPS.
@@ -328,25 +326,18 @@ function gravityVec(betaDeg, gammaDeg) {
   return [-Math.cos(b) * Math.sin(g), -Math.sin(b), -Math.cos(b) * Math.cos(g)];
 }
 
-// Inclinomètre 2 axes, relatif à l'orientation de référence `zeroG` (tare).
-// On construit un repère fixé à l'appareil à partir de la tare :
-//   d    = « bas » de référence (zeroG)
-//   fwd  = axe LONG de l'appareil (Y) projeté dans le plan horizontal de référence
-//   right= d × fwd  (axe transversal)
-// Puis :
-//   Pente  = basculement autour de l'axe transversal  = asin(-fwd·g)
-//            → comme un niveau à bulle posé sur le bord long : INSENSIBLE au
-//              roulis autour de ce bord (rotation autour de fwd).
-//   Dévers = roulis autour de l'axe long              = asin(-right·g)
-//   angle  = écart total (toutes directions)          = acos(g·d)  [utile carto/3D]
+// Inclinomètre 2 axes (indicatif), référencé à l'horizontale absolue (gravité) :
+//   d    = bas absolu = (0,0,-1)
+//   fwd  = axe Y de l'appareil projeté à l'horizontale ; right = d × fwd
+//   roll/pitch = asin(-fwd·g) / asin(-right·g) ; angle = acos(g·d)
+// La séparation roulis/tangage exacte est faite en post-traitement (cap GPS).
 const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const clamp1 = (x) => Math.max(-1, Math.min(1, x));
 
 function onOrientation(ev) {
   if (ev.beta == null || ev.gamma == null) return;
   const g = gravityVec(ev.beta, ev.gamma);
-  lastG = g;
-  const d = zeroG;
+  const d = DOWN;
 
   // Repère indicatif : axe avant fixé à Y de l'appareil, projeté ⟂ d (repli sur X).
   // (La séparation roulis/tangage exacte est faite en post-traitement.)
@@ -405,25 +396,6 @@ function onOrientation(ev) {
   $("capVal").textContent = capShow == null ? "—"
     : Math.round(capShow) + "° " + aspectName(capShow) + (useGps ? " gps" : "");
   setDot("orientDot", "ok");
-}
-
-// Tare : l'orientation courante devient le « niveau 0° ».
-function tareZero() {
-  if (!lastG) { flashHint("Capteur d'inclinaison pas encore prêt."); return; }
-  zeroG = lastG.slice();
-  saveZero();
-  $("calibChip").style.display = "";
-  flashHint("Attitude de référence calée : tangage et roulis remis à 0°.");
-  if (navigator.vibrate) navigator.vibrate([20, 40, 20]);
-}
-
-function saveZero() { try { localStorage.setItem("carto-pentes:zero", JSON.stringify(zeroG)); } catch (e) {} }
-function loadZero() {
-  try {
-    const z = JSON.parse(localStorage.getItem("carto-pentes:zero") || "null");
-    if (Array.isArray(z) && z.length === 3) { zeroG = z; return true; }
-  } catch (e) {}
-  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -549,7 +521,6 @@ function toGeoJSON() {
       properties: {
         type: "trace", points: state.track.length,
         distance_m: +trackDistance().toFixed(1),
-        ref_zero_g: zeroG.map((v) => +v.toFixed(5)),   // référence de tare (pour reprocessing)
         pente_min_deg: angles.length ? +Math.min(...angles).toFixed(2) : null,
         pente_max_deg: angles.length ? +Math.max(...angles).toFixed(2) : null,
         pente_moy_deg: angles.length ? +(angles.reduce((s, a) => s + a, 0) / angles.length).toFixed(2) : null,
@@ -572,7 +543,7 @@ function toGeoJSON() {
       angle_deg: p.angle == null ? null : +p.angle.toFixed(2),
       orientation_deg: p.aspect == null ? null : +p.aspect.toFixed(1),
       orientation: aspectName(p.aspect),
-      // Capteurs bruts (pour recalcul hors-ligne avec ref_zero_g/mount_rot_deg)
+      // Capteurs bruts (gravité absolue) pour recalcul hors-ligne roulis/tangage
       beta_deg: p.beta == null ? null : +p.beta.toFixed(2),
       gamma_deg: p.gamma == null ? null : +p.gamma.toFixed(2),
       alpha_deg: p.alpha == null ? null : +p.alpha.toFixed(1),
@@ -662,13 +633,12 @@ async function start() {
   $("overlay").style.display = "none";
   $("legend").style.display = "block";
   $("record").disabled = false;
-  $("zero").disabled = false;
   $("mark").disabled = false;
   $("center").disabled = false;
   setDot("recDot", "ok");
   $("recState").textContent = "prêt";
   updateCounts();
-  $("hint").textContent = "Pose le chariot à plat, ⊙ Zéro, puis Enregistre. Capteurs bruts loggés pour le post-traitement.";
+  $("hint").textContent = "Monte l'iPhone sur l'axe, puis Enregistre. Inclinomètres déjà calibrés (gravité) ; capteurs bruts loggés.";
 }
 
 // ---------------------------------------------------------------------------
@@ -676,7 +646,6 @@ async function start() {
 // ---------------------------------------------------------------------------
 $("start").addEventListener("click", start);
 $("record").addEventListener("click", toggleRecord);
-$("zero").addEventListener("click", tareZero);
 $("mark").addEventListener("click", markPoint);
 $("export").addEventListener("click", exportGeoJSON);
 $("center").addEventListener("click", () => {
@@ -694,7 +663,6 @@ map.on("dragstart", () => { autoCenter = false; });
 window.addEventListener("resize", () => setTimeout(() => map.invalidateSize(), 150));
 
 load();
-if (loadZero()) $("calibChip").style.display = "";
 updateCounts();
 </script>
 </body>
