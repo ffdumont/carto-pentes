@@ -201,6 +201,9 @@ const state = {
 const tilt = { pitch: null, roll: null, angle: null, aspect: null, heading: null };  // attitude live
 let lastFix = null;       // dernière position connue
 let recording = false;    // enregistrement continu en cours ?
+// Cap & vitesse de DÉPLACEMENT issus du GPS — indépendants de l'orientation du
+// téléphone. C'est la bonne source de cap pour un chariot en mouvement.
+let gpsCourse = null, gpsSpeed = null;
 
 // Orientation de référence (tare). Vecteur gravité (repère appareil) qui
 // correspond au « niveau 0° ». Par défaut : téléphone à plat écran vers le haut.
@@ -397,7 +400,9 @@ function onOrientation(ev) {
   tilt.pitch = pitch; tilt.roll = roll; tilt.angle = angle; tilt.aspect = aspect; tilt.heading = cap;
   $("angleVal").textContent = (pitch >= 0 ? "+" : "") + pitch.toFixed(1);
   $("rollVal").textContent = (roll >= 0 ? "+" : "") + roll.toFixed(1);
-  $("capVal").textContent = cap == null ? "—" : Math.round(cap) + "° " + aspectName(cap);
+  const capShow = gpsCourse != null ? gpsCourse : cap;
+  $("capVal").textContent = capShow == null ? "—"
+    : Math.round(capShow) + "° " + aspectName(capShow) + (gpsCourse != null ? " gps" : "");
   setDot("orientDot", "ok");
 }
 
@@ -431,6 +436,10 @@ function onPosition(pos) {
   lastFix = { lat: c.latitude, lon: c.longitude, acc: c.accuracy, alt: c.altitude, t: pos.timestamp };
   const ll = [c.latitude, c.longitude];
 
+  // Cap de déplacement GPS : valable seulement en mouvement (sinon bruité/absent)
+  gpsSpeed = (c.speed != null && c.speed >= 0) ? c.speed : null;
+  gpsCourse = (c.heading != null && c.heading >= 0 && gpsSpeed != null && gpsSpeed > 0.4) ? c.heading : null;
+
   if (!posMarker) {
     posMarker = L.circleMarker(ll, { radius: 6, color: "#fff", weight: 2, fillColor: "#1e88e5", fillOpacity: 1 }).addTo(map);
     accCircle = L.circle(ll, { radius: c.accuracy, color: "#1e88e5", weight: 1, fillOpacity: .08 }).addTo(map);
@@ -451,6 +460,7 @@ function onPosition(pos) {
       lat: c.latitude, lon: c.longitude, acc: c.accuracy, alt: c.altitude,
       t: pos.timestamp, pitch: tilt.pitch, roll: tilt.roll,
       angle: tilt.angle, aspect: tilt.aspect, heading: tilt.heading,
+      gpsCourse: gpsCourse, speed: gpsSpeed,
     };
     const prev = state.track[state.track.length - 1];
     state.track.push(sample);
@@ -539,7 +549,9 @@ function toGeoJSON() {
       type: "echantillon",
       tangage_deg: p.pitch == null ? null : +p.pitch.toFixed(2),
       roulis_deg: p.roll == null ? null : +p.roll.toFixed(2),
-      cap_deg: p.heading == null ? null : +p.heading.toFixed(1),
+      cap_gps_deg: p.gpsCourse == null ? null : +p.gpsCourse.toFixed(1),
+      vitesse_ms: p.speed == null ? null : +p.speed.toFixed(2),
+      cap_magneto_deg: p.heading == null ? null : +p.heading.toFixed(1),
       angle_deg: p.angle == null ? null : +p.angle.toFixed(2),
       orientation_deg: p.aspect == null ? null : +p.aspect.toFixed(1),
       orientation: aspectName(p.aspect),
