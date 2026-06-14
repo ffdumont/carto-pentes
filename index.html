@@ -140,6 +140,7 @@
   <span class="chip"><span class="dot" id="orientDot"></span>Inclin.</span>
   <span class="chip"><span class="dot" id="lockDot"></span>Écran</span>
   <span class="chip" id="calibChip" style="display:none">⊙ calé</span>
+  <span class="chip" id="statsChip">0 pt · 0 m</span>
 </div>
 
 <div id="map"></div>
@@ -159,8 +160,8 @@
       <div class="lbl">Roulis</div>
     </div>
     <div class="cell">
-      <div class="val"><span id="ptVal">0</span></div>
-      <div class="lbl"><span id="distVal">0 m</span></div>
+      <div class="val"><span id="capVal">—</span></div>
+      <div class="lbl">Cap</div>
     </div>
   </div>
 
@@ -258,8 +259,7 @@ function fmtDist(m) { return m < 1000 ? Math.round(m) + " m" : (m / 1000).toFixe
 function setDot(id, cls) { $(id).className = "dot" + (cls ? " " + cls : ""); }
 
 function updateCounts() {
-  $("ptVal").textContent = state.track.length;
-  $("distVal").textContent = fmtDist(trackDistance());
+  $("statsChip").textContent = state.track.length + " pt · " + fmtDist(trackDistance());
   const has = state.track.length || state.points.length;
   $("export").disabled = !has;
   $("clear").disabled = !has;
@@ -329,18 +329,29 @@ function gravityVec(betaDeg, gammaDeg) {
 const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const clamp1 = (x) => Math.max(-1, Math.min(1, x));
 
+// Écran en paysage ? (détermine quel axe de l'appareil est « l'avant » du châssis)
+function isLandscape() {
+  const t = (screen.orientation && screen.orientation.type) || "";
+  if (t) return /landscape/.test(t);
+  if (typeof window.orientation === "number") return Math.abs(window.orientation) === 90;
+  return window.innerWidth > window.innerHeight;
+}
+
 function onOrientation(ev) {
   if (ev.beta == null || ev.gamma == null) return;
   const g = gravityVec(ev.beta, ev.gamma);
   lastG = g;
   const d = zeroG;
 
-  // fwd = axe long (Y) projeté ⟂ d ; repli sur X si Y est presque vertical
-  let base = [0, 1, 0], bd = dot3(base, d);
+  // Axe « avant » du châssis : paysage → petit côté (X, sens de marche) ;
+  // portrait → grand côté (Y). Projeté ⟂ d ; repli sur l'autre axe si presque vertical.
+  const land = isLandscape();
+  let base = land ? [1, 0, 0] : [0, 1, 0];
+  let bd = dot3(base, d);
   let fwd = [base[0] - bd * d[0], base[1] - bd * d[1], base[2] - bd * d[2]];
   let fl = Math.hypot(fwd[0], fwd[1], fwd[2]);
   if (fl < 0.2) {
-    base = [1, 0, 0]; bd = dot3(base, d);
+    base = land ? [0, 1, 0] : [1, 0, 0]; bd = dot3(base, d);
     fwd = [base[0] - bd * d[0], base[1] - bd * d[1], base[2] - bd * d[2]];
     fl = Math.hypot(fwd[0], fwd[1], fwd[2]);
   }
@@ -364,6 +375,7 @@ function onOrientation(ev) {
   tilt.pitch = pitch; tilt.roll = roll; tilt.angle = angle; tilt.aspect = aspect; tilt.heading = heading;
   $("angleVal").textContent = (pitch >= 0 ? "+" : "") + pitch.toFixed(1);
   $("rollVal").textContent = (roll >= 0 ? "+" : "") + roll.toFixed(1);
+  $("capVal").textContent = heading == null ? "—" : Math.round(heading) + "°";
   setDot("orientDot", "ok");
 }
 
