@@ -11,3 +11,6 @@ carto-pentes-ca.cer
 # Python
 __pycache__/
 .venv/
+
+# Sorties d'analyse (reconstructions, cartes, aperçus)
+data/
