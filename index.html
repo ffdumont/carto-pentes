@@ -152,11 +152,11 @@
   <div class="live">
     <div class="cell">
       <div class="val"><span id="angleVal">—</span><span class="unit">°</span></div>
-      <div class="lbl">Pente live</div>
+      <div class="lbl">Tangage</div>
     </div>
     <div class="cell">
-      <div class="val"><span id="aspectVal">—</span></div>
-      <div class="lbl">Orient.</div>
+      <div class="val"><span id="rollVal">—</span><span class="unit">°</span></div>
+      <div class="lbl">Roulis</div>
     </div>
     <div class="cell">
       <div class="val"><span id="ptVal">0</span></div>
@@ -194,7 +194,7 @@ const state = {
   points: [],  // waypoints manuels       : {lat, lon, angle, aspect, acc, t}
 };
 
-const tilt = { angle: null, aspect: null, heading: null };  // inclinaison live
+const tilt = { pitch: null, roll: null, angle: null, aspect: null, heading: null };  // attitude live
 let lastFix = null;       // dernière position connue
 let recording = false;    // enregistrement continu en cours ?
 
@@ -315,25 +315,45 @@ function gravityVec(betaDeg, gammaDeg) {
   return [-Math.cos(b) * Math.sin(g), -Math.sin(b), -Math.cos(b) * Math.cos(g)];
 }
 
-// La pente est l'écart angulaire entre l'orientation courante et l'orientation
-// de référence `zeroG` (tare). Indépendant de l'orientation de l'écran : marche
-// que le téléphone soit à plat, en paysage ou posé sur la tranche (niveau à bulle).
-//   pente = acos( g · zeroG )
-// Par défaut zeroG = (0,0,-1) → équivaut à acos(cosβ·cosγ) (référence « à plat ».)
+// Inclinomètre 2 axes, relatif à l'orientation de référence `zeroG` (tare).
+// On construit un repère fixé à l'appareil à partir de la tare :
+//   d    = « bas » de référence (zeroG)
+//   fwd  = axe LONG de l'appareil (Y) projeté dans le plan horizontal de référence
+//   right= d × fwd  (axe transversal)
+// Puis :
+//   Pente  = basculement autour de l'axe transversal  = asin(-fwd·g)
+//            → comme un niveau à bulle posé sur le bord long : INSENSIBLE au
+//              roulis autour de ce bord (rotation autour de fwd).
+//   Dévers = roulis autour de l'axe long              = asin(-right·g)
+//   angle  = écart total (toutes directions)          = acos(g·d)  [utile carto/3D]
+const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const clamp1 = (x) => Math.max(-1, Math.min(1, x));
+
 function onOrientation(ev) {
   if (ev.beta == null || ev.gamma == null) return;
   const g = gravityVec(ev.beta, ev.gamma);
   lastG = g;
+  const d = zeroG;
 
-  const dot = Math.max(-1, Math.min(1, g[0] * zeroG[0] + g[1] * zeroG[1] + g[2] * zeroG[2]));
-  const angle = deg(Math.acos(dot));
+  // fwd = axe long (Y) projeté ⟂ d ; repli sur X si Y est presque vertical
+  let base = [0, 1, 0], bd = dot3(base, d);
+  let fwd = [base[0] - bd * d[0], base[1] - bd * d[1], base[2] - bd * d[2]];
+  let fl = Math.hypot(fwd[0], fwd[1], fwd[2]);
+  if (fl < 0.2) {
+    base = [1, 0, 0]; bd = dot3(base, d);
+    fwd = [base[0] - bd * d[0], base[1] - bd * d[1], base[2] - bd * d[2]];
+    fl = Math.hypot(fwd[0], fwd[1], fwd[2]);
+  }
+  fwd = [fwd[0] / fl, fwd[1] / fl, fwd[2] / fl];
+  const right = [d[1] * fwd[2] - d[2] * fwd[1], d[2] * fwd[0] - d[0] * fwd[2], d[0] * fwd[1] - d[1] * fwd[0]];
 
-  // Direction de descente : composante de la gravité dans le plan du « pont »
-  // (perpendiculaire à l'axe de référence u = -zeroG), ramenée à un azimut via la boussole.
-  const u = [-zeroG[0], -zeroG[1], -zeroG[2]];
-  const gu = g[0] * u[0] + g[1] * u[1] + g[2] * u[2];
-  const dx = g[0] - gu * u[0], dy = g[1] - gu * u[1];
+  const pitch = deg(Math.asin(clamp1(-dot3(fwd, g))));   // Pente (1 axe, type niveau à bulle)
+  const roll = deg(Math.asin(clamp1(-dot3(right, g))));   // Dévers
+  const angle = deg(Math.acos(clamp1(dot3(g, d))));        // écart total
 
+  // Azimut de descente (approx.) : projection de g dans le plan du pont + boussole
+  const gu = dot3(g, d);
+  const dx = g[0] - gu * d[0], dy = g[1] - gu * d[1];
   let aspect = null;
   const heading = (ev.webkitCompassHeading != null) ? ev.webkitCompassHeading
     : (ev.alpha != null && ev.absolute ? (360 - ev.alpha) : null);
@@ -341,9 +361,9 @@ function onOrientation(ev) {
     aspect = ((heading + deg(Math.atan2(dx, dy))) % 360 + 360) % 360;
   }
 
-  tilt.angle = angle; tilt.aspect = aspect; tilt.heading = heading;
-  $("angleVal").textContent = angle.toFixed(1);
-  $("aspectVal").textContent = aspectName(aspect);
+  tilt.pitch = pitch; tilt.roll = roll; tilt.angle = angle; tilt.aspect = aspect; tilt.heading = heading;
+  $("angleVal").textContent = (pitch >= 0 ? "+" : "") + pitch.toFixed(1);
+  $("rollVal").textContent = (roll >= 0 ? "+" : "") + roll.toFixed(1);
   setDot("orientDot", "ok");
 }
 
@@ -353,7 +373,7 @@ function tareZero() {
   zeroG = lastG.slice();
   saveZero();
   $("calibChip").style.display = "";
-  flashHint("Niveau calé à 0° pour cette position de montage.");
+  flashHint("Attitude de référence calée : tangage et roulis remis à 0°.");
   if (navigator.vibrate) navigator.vibrate([20, 40, 20]);
 }
 
@@ -395,7 +415,8 @@ function onPosition(pos) {
     lastSampleT = pos.timestamp;
     const sample = {
       lat: c.latitude, lon: c.longitude, acc: c.accuracy, alt: c.altitude,
-      t: pos.timestamp, angle: tilt.angle, aspect: tilt.aspect, heading: tilt.heading,
+      t: pos.timestamp, pitch: tilt.pitch, roll: tilt.roll,
+      angle: tilt.angle, aspect: tilt.aspect, heading: tilt.heading,
     };
     const prev = state.track[state.track.length - 1];
     state.track.push(sample);
@@ -482,10 +503,12 @@ function toGeoJSON() {
     type: "Feature",
     properties: {
       type: "echantillon",
+      tangage_deg: p.pitch == null ? null : +p.pitch.toFixed(2),
+      roulis_deg: p.roll == null ? null : +p.roll.toFixed(2),
+      cap_deg: p.heading == null ? null : +p.heading.toFixed(1),
       angle_deg: p.angle == null ? null : +p.angle.toFixed(2),
       orientation_deg: p.aspect == null ? null : +p.aspect.toFixed(1),
       orientation: aspectName(p.aspect),
-      cap_deg: p.heading == null ? null : +p.heading.toFixed(1),
       alt_m: p.alt == null ? null : +p.alt.toFixed(1),
       gps_acc_m: p.acc == null ? null : +p.acc.toFixed(1),
       timestamp: new Date(p.t).toISOString(),
