@@ -152,16 +152,16 @@
 <div id="panel">
   <div class="live">
     <div class="cell">
-      <div class="val"><span id="angleVal">—</span><span class="unit">°</span></div>
-      <div class="lbl">Tangage</div>
-    </div>
-    <div class="cell">
       <div class="val"><span id="rollVal">—</span><span class="unit">°</span></div>
-      <div class="lbl">Roulis</div>
+      <div class="lbl">Roulis (travers)</div>
     </div>
     <div class="cell">
       <div class="val"><span id="capVal">—</span></div>
-      <div class="lbl">Cap</div>
+      <div class="lbl">Cap GPS</div>
+    </div>
+    <div class="cell">
+      <div class="val"><span id="angleVal">—</span><span class="unit">°</span></div>
+      <div class="lbl">Tangage (ind.)</div>
     </div>
   </div>
 
@@ -198,12 +198,18 @@ const state = {
   points: [],  // waypoints manuels       : {lat, lon, angle, aspect, acc, t}
 };
 
-const tilt = { pitch: null, roll: null, angle: null, aspect: null, heading: null };  // attitude live
+const tilt = { pitch: null, roll: null, angle: null, aspect: null, heading: null,
+  beta: null, gamma: null, alpha: null, compass: null };  // attitude live + capteurs bruts
 let lastFix = null;       // dernière position connue
 let recording = false;    // enregistrement continu en cours ?
 // Cap & vitesse de DÉPLACEMENT issus du GPS — indépendants de l'orientation du
 // téléphone. C'est la bonne source de cap pour un chariot en mouvement.
-let gpsCourse = null, gpsSpeed = null;
+let gpsCourse = null, gpsSpeed = null, gpsMoving = false;
+
+// Accumulateur d'inclinaison entre deux points GPS : on moyenne les ~60 lectures/s
+// (réduit le bruit de vibration du chariot) et on garde l'écart-type comme qualité.
+let tiltAcc = null;
+function resetTiltAcc() { tiltAcc = { n: 0, roll: 0, roll2: 0, pitch: 0, beta: 0, gamma: 0 }; }
 
 // Orientation de référence (tare). Vecteur gravité (repère appareil) qui
 // correspond au « niveau 0° ». Par défaut : téléphone à plat écran vers le haut.
@@ -309,10 +315,10 @@ function redrawAll() {
   updateCounts();
 }
 
-// Trace : segment coloré par la pente du point d'arrivée
+// Trace : segment coloré par la pente EN TRAVERS (|roulis|), mesure fiable sur 2 roues
 function drawSegment(a, b) {
   L.polyline([[a.lat, a.lon], [b.lat, b.lon]], {
-    color: slopeColor(b.angle), weight: 5, opacity: .9,
+    color: slopeColor(Math.abs(b.roll)), weight: 5, opacity: .9,
   }).addTo(trackLayer);
 }
 
@@ -398,11 +404,20 @@ function onOrientation(ev) {
   }
 
   tilt.pitch = pitch; tilt.roll = roll; tilt.angle = angle; tilt.aspect = aspect; tilt.heading = cap;
+  tilt.beta = ev.beta; tilt.gamma = ev.gamma;
+  tilt.alpha = (ev.alpha != null ? ev.alpha : null);
+  tilt.compass = (ev.webkitCompassHeading != null ? ev.webkitCompassHeading : null);
+  if (recording && tiltAcc) {
+    tiltAcc.n++; tiltAcc.roll += roll; tiltAcc.roll2 += roll * roll;
+    tiltAcc.pitch += pitch; tiltAcc.beta += ev.beta; tiltAcc.gamma += ev.gamma;
+  }
+
   $("angleVal").textContent = (pitch >= 0 ? "+" : "") + pitch.toFixed(1);
   $("rollVal").textContent = (roll >= 0 ? "+" : "") + roll.toFixed(1);
-  const capShow = gpsCourse != null ? gpsCourse : cap;
+  const useGps = gpsMoving && gpsCourse != null;
+  const capShow = useGps ? gpsCourse : cap;
   $("capVal").textContent = capShow == null ? "—"
-    : Math.round(capShow) + "° " + aspectName(capShow) + (gpsCourse != null ? " gps" : "");
+    : Math.round(capShow) + "° " + aspectName(capShow) + (useGps ? " gps" : "");
   setDot("orientDot", "ok");
 }
 
@@ -436,9 +451,11 @@ function onPosition(pos) {
   lastFix = { lat: c.latitude, lon: c.longitude, acc: c.accuracy, alt: c.altitude, t: pos.timestamp };
   const ll = [c.latitude, c.longitude];
 
-  // Cap de déplacement GPS : valable seulement en mouvement (sinon bruité/absent)
+  // Cap & vitesse GPS bruts : enregistrés tels quels (l'analyse filtrera). Le cap
+  // n'est fiable qu'en mouvement → flag gpsMoving pour l'affichage live seulement.
   gpsSpeed = (c.speed != null && c.speed >= 0) ? c.speed : null;
-  gpsCourse = (c.heading != null && c.heading >= 0 && gpsSpeed != null && gpsSpeed > 0.4) ? c.heading : null;
+  gpsCourse = (c.heading != null && c.heading >= 0) ? c.heading : null;
+  gpsMoving = gpsSpeed != null && gpsSpeed > 0.4;
 
   if (!posMarker) {
     posMarker = L.circleMarker(ll, { radius: 6, color: "#fff", weight: 2, fillColor: "#1e88e5", fillOpacity: 1 }).addTo(map);
@@ -456,10 +473,21 @@ function onPosition(pos) {
   // Enregistrement continu : on échantillonne position + inclinaison du moment
   if (recording && pos.timestamp - lastSampleT >= THROTTLE_MS) {
     lastSampleT = pos.timestamp;
+    // Moyenne (et écart-type pour le roulis) sur l'intervalle écoulé
+    let roll = tilt.roll, rollStd = 0, pitch = tilt.pitch, beta = tilt.beta, gamma = tilt.gamma;
+    if (tiltAcc && tiltAcc.n > 0) {
+      roll = tiltAcc.roll / tiltAcc.n;
+      rollStd = Math.sqrt(Math.max(0, tiltAcc.roll2 / tiltAcc.n - roll * roll));
+      pitch = tiltAcc.pitch / tiltAcc.n;
+      beta = tiltAcc.beta / tiltAcc.n;
+      gamma = tiltAcc.gamma / tiltAcc.n;
+    }
+    resetTiltAcc();
     const sample = {
       lat: c.latitude, lon: c.longitude, acc: c.accuracy, alt: c.altitude,
-      t: pos.timestamp, pitch: tilt.pitch, roll: tilt.roll,
+      t: pos.timestamp, pitch: pitch, roll: roll, rollStd: rollStd,
       angle: tilt.angle, aspect: tilt.aspect, heading: tilt.heading,
+      beta: beta, gamma: gamma, alpha: tilt.alpha, compass: tilt.compass,
       gpsCourse: gpsCourse, speed: gpsSpeed,
     };
     const prev = state.track[state.track.length - 1];
@@ -484,6 +512,7 @@ function toggleRecord() {
   const btn = $("record");
   if (recording) {
     lastSampleT = 0;
+    resetTiltAcc();
     btn.textContent = "⏹ Arrêter";
     btn.classList.add("on");
     setDot("recDot", "rec");
@@ -534,6 +563,8 @@ function toGeoJSON() {
       properties: {
         type: "trace", points: state.track.length,
         distance_m: +trackDistance().toFixed(1),
+        ref_zero_g: zeroG.map((v) => +v.toFixed(5)),   // référence de tare (pour reprocessing)
+        mount_rot_deg: mountRot,                         // orientation de montage (⟳ Avant)
         pente_min_deg: angles.length ? +Math.min(...angles).toFixed(2) : null,
         pente_max_deg: angles.length ? +Math.max(...angles).toFixed(2) : null,
         pente_moy_deg: angles.length ? +(angles.reduce((s, a) => s + a, 0) / angles.length).toFixed(2) : null,
@@ -547,14 +578,20 @@ function toGeoJSON() {
     type: "Feature",
     properties: {
       type: "echantillon",
-      tangage_deg: p.pitch == null ? null : +p.pitch.toFixed(2),
       roulis_deg: p.roll == null ? null : +p.roll.toFixed(2),
+      roulis_std_deg: p.rollStd == null ? null : +p.rollStd.toFixed(2),
       cap_gps_deg: p.gpsCourse == null ? null : +p.gpsCourse.toFixed(1),
       vitesse_ms: p.speed == null ? null : +p.speed.toFixed(2),
+      tangage_deg: p.pitch == null ? null : +p.pitch.toFixed(2),
       cap_magneto_deg: p.heading == null ? null : +p.heading.toFixed(1),
       angle_deg: p.angle == null ? null : +p.angle.toFixed(2),
       orientation_deg: p.aspect == null ? null : +p.aspect.toFixed(1),
       orientation: aspectName(p.aspect),
+      // Capteurs bruts (pour recalcul hors-ligne avec ref_zero_g/mount_rot_deg)
+      beta_deg: p.beta == null ? null : +p.beta.toFixed(2),
+      gamma_deg: p.gamma == null ? null : +p.gamma.toFixed(2),
+      alpha_deg: p.alpha == null ? null : +p.alpha.toFixed(1),
+      compas_brut_deg: p.compass == null ? null : +p.compass.toFixed(1),
       alt_m: p.alt == null ? null : +p.alt.toFixed(1),
       gps_acc_m: p.acc == null ? null : +p.acc.toFixed(1),
       timestamp: new Date(p.t).toISOString(),
