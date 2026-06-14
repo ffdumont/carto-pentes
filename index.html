@@ -365,17 +365,30 @@ function onOrientation(ev) {
   // Azimut de descente (approx.) : projection de g dans le plan du pont + boussole
   const gu = dot3(g, d);
   const dx = g[0] - gu * d[0], dy = g[1] - gu * d[1];
-  let aspect = null;
-  const heading = (ev.webkitCompassHeading != null) ? ev.webkitCompassHeading
+  const headRaw = (ev.webkitCompassHeading != null) ? ev.webkitCompassHeading
     : (ev.alpha != null && ev.absolute ? (360 - ev.alpha) : null);
-  if (heading != null && (Math.abs(dx) > 1e-3 || Math.abs(dy) > 1e-3)) {
-    aspect = ((heading + deg(Math.atan2(dx, dy))) % 360 + 360) % 360;
+  let aspect = null;
+  if (headRaw != null && (Math.abs(dx) > 1e-3 || Math.abs(dy) > 1e-3)) {
+    aspect = ((headRaw + deg(Math.atan2(dx, dy))) % 360 + 360) % 360;
   }
 
-  tilt.pitch = pitch; tilt.roll = roll; tilt.angle = angle; tilt.aspect = aspect; tilt.heading = heading;
+  // Cap = direction géographique de l'AVANT du châssis (axe fwd). La boussole donne
+  // le cap du haut portrait (+Y) ; on le corrige de l'angle horizontal +Y→fwd
+  // (≈ +90° à plat en paysage), pour coller au montage réel du téléphone.
+  let cap = null;
+  if (headRaw != null) {
+    const up = [-g[0], -g[1], -g[2]];
+    const proj = (v) => { const k = dot3(v, up); return [v[0] - k * up[0], v[1] - k * up[1], v[2] - k * up[2]]; };
+    const yh = proj([0, 1, 0]), fh = proj(fwd);
+    const cr = [yh[1] * fh[2] - yh[2] * fh[1], yh[2] * fh[0] - yh[0] * fh[2], yh[0] * fh[1] - yh[1] * fh[0]];
+    const cw = -deg(Math.atan2(dot3(cr, up), dot3(yh, fh)));   // angle horaire +Y → fwd
+    cap = ((headRaw + cw) % 360 + 360) % 360;
+  }
+
+  tilt.pitch = pitch; tilt.roll = roll; tilt.angle = angle; tilt.aspect = aspect; tilt.heading = cap;
   $("angleVal").textContent = (pitch >= 0 ? "+" : "") + pitch.toFixed(1);
   $("rollVal").textContent = (roll >= 0 ? "+" : "") + roll.toFixed(1);
-  $("capVal").textContent = heading == null ? "—" : Math.round(heading) + "°";
+  $("capVal").textContent = cap == null ? "—" : Math.round(cap) + "° " + aspectName(cap);
   setDot("orientDot", "ok");
 }
 
