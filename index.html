@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#1b5e20">
+<title>carto-pentes</title>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+
+<style>
+  :root {
+    --bg: #0e1512;
+    --panel: #16201b;
+    --accent: #2e7d32;
+    --accent-hi: #43a047;
+    --rec: #c62828;
+    --rec-hi: #e53935;
+    --text: #e8f0ea;
+    --muted: #9bb0a3;
+    --safe-top: env(safe-area-inset-top, 0px);
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  body { display: flex; flex-direction: column; overflow: hidden; }
+
+  #map { flex: 1 1 auto; width: 100%; background: #0a0f0c; }
+  .leaflet-container { background: #0a0f0c; }
+
+  /* Bandeau d'état (haut) */
+  #status {
+    position: absolute; top: calc(var(--safe-top) + 8px); left: 8px; right: 8px;
+    z-index: 1000; display: flex; gap: 6px; flex-wrap: wrap; pointer-events: none;
+  }
+  .chip {
+    background: rgba(22,32,27,.92); border: 1px solid #2c3a32; border-radius: 999px;
+    padding: 5px 10px; font-size: 12px; line-height: 1; color: var(--muted);
+    backdrop-filter: blur(6px); display: flex; align-items: center; gap: 5px;
+  }
+  .chip b { color: var(--text); font-variant-numeric: tabular-nums; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #555; flex: none; }
+  .dot.ok { background: #43a047; }
+  .dot.warn { background: #f9a825; }
+  .dot.err { background: #e53935; }
+  .dot.rec { background: #e53935; animation: blink 1s steps(2, start) infinite; }
+  @keyframes blink { 50% { opacity: .25; } }
+
+  /* Panneau de contrôle (bas) */
+  #panel {
+    flex: none; background: var(--panel); border-top: 1px solid #233029;
+    padding: 10px 12px calc(10px + var(--safe-bottom));
+    display: flex; flex-direction: column; gap: 10px;
+  }
+
+  .live { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; text-align: center; }
+  .live .cell { background: #0f1813; border: 1px solid #233029; border-radius: 12px; padding: 8px 4px; }
+  .live .val { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .live .lbl { font-size: 10px; color: var(--muted); margin-top: 2px; text-transform: uppercase; letter-spacing: .03em; }
+  .live .unit { font-size: 14px; font-weight: 500; color: var(--muted); }
+
+  .row { display: flex; gap: 8px; }
+  button {
+    appearance: none; border: none; border-radius: 12px; color: #fff;
+    font-size: 16px; font-weight: 600; padding: 14px 10px; flex: 1;
+    background: #2a3a31; transition: transform .05s, background .15s; cursor: pointer;
+  }
+  button:active { transform: scale(.97); }
+  button:disabled { opacity: .4; }
+  button.rec { background: var(--accent); font-size: 18px; padding: 18px 10px; }
+  button.rec.on { background: var(--rec); }
+  button.danger { background: #3a2626; color: #ff9b9b; }
+  button.ghost { background: #1d2722; color: var(--muted); }
+
+  #enableBtn {
+    position: absolute; inset: 0; z-index: 2000; margin: auto; height: max-content;
+    max-width: 320px; align-self: center; display: flex; flex-direction: column;
+    gap: 14px; padding: 28px; background: var(--panel); border-radius: 18px;
+    border: 1px solid #2c3a32; text-align: center;
+  }
+  #enableBtn h1 { margin: 0; font-size: 22px; }
+  #enableBtn p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.5; }
+  #overlay { position: absolute; inset: 0; z-index: 1999; background: rgba(8,12,10,.75); backdrop-filter: blur(2px); }
+
+  .hint { font-size: 12px; color: var(--muted); text-align: center; min-height: 1em; }
+  .leaflet-control-attribution { font-size: 9px; }
+  .wp-label {
+    background: #1565c0; color: #fff; border-radius: 6px; padding: 1px 5px;
+    font-size: 12px; font-weight: 700; border: 1px solid #fff; white-space: nowrap;
+  }
+
+  /* Légende pente */
+  #legend {
+    position: absolute; right: 8px; bottom: calc(8px); z-index: 1000;
+    background: rgba(22,32,27,.92); border: 1px solid #2c3a32; border-radius: 10px;
+    padding: 6px 8px; font-size: 10px; color: var(--muted); pointer-events: none;
+    display: none;
+  }
+  #legend .bar { height: 8px; width: 110px; border-radius: 4px; margin: 3px 0;
+    background: linear-gradient(90deg, hsl(120,75%,45%), hsl(60,75%,45%), hsl(30,75%,45%), hsl(0,75%,45%)); }
+  #legend .scale { display: flex; justify-content: space-between; }
+</style>
+</head>
+<body>
+
+<div id="overlay"></div>
+<div id="enableBtn">
+  <h1>🛞 carto-pentes</h1>
+  <p>Cartographie la pente et la position en continu. Monte l'iPhone à plat sur le chariot, puis lance l'enregistrement et promène-le sur le terrain.</p>
+  <button class="rec" id="start">Activer les capteurs</button>
+  <p style="font-size:12px">iOS demande une autorisation explicite pour la position et les capteurs de mouvement.</p>
+</div>
+
+<div id="status">
+  <span class="chip"><span class="dot" id="recDot"></span><b id="recState">prêt</b></span>
+  <span class="chip"><span class="dot" id="gpsDot"></span>GPS <b id="gpsAcc">—</b></span>
+  <span class="chip"><span class="dot" id="orientDot"></span>Inclin.</span>
+  <span class="chip"><span class="dot" id="lockDot"></span>Écran</span>
+</div>
+
+<div id="map"></div>
+<div id="legend">Pente
+  <div class="bar"></div>
+  <div class="scale"><span>0°</span><span>≥25°</span></div>
+</div>
+
+<div id="panel">
+  <div class="live">
+    <div class="cell">
+      <div class="val"><span id="angleVal">—</span><span class="unit">°</span></div>
+      <div class="lbl">Pente live</div>
+    </div>
+    <div class="cell">
+      <div class="val"><span id="aspectVal">—</span></div>
+      <div class="lbl">Orient.</div>
+    </div>
+    <div class="cell">
+      <div class="val"><span id="ptVal">0</span></div>
+      <div class="lbl"><span id="distVal">0 m</span></div>
+    </div>
+  </div>
+
+  <div class="row">
+    <button class="rec" id="record" disabled>⏺ Enregistrer</button>
+  </div>
+  <div class="hint" id="hint">En attente d'activation…</div>
+
+  <div class="row">
+    <button class="ghost" id="mark" disabled>⚑ Marquer</button>
+    <button class="ghost" id="center" disabled>⌖ Centrer</button>
+  </div>
+  <div class="row">
+    <button class="ghost" id="export" disabled>⬇︎ Export GeoJSON</button>
+    <button class="danger" id="clear" disabled>Effacer</button>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+"use strict";
+
+// ---------------------------------------------------------------------------
+// État
+// ---------------------------------------------------------------------------
+const STORAGE_KEY = "carto-pentes:v2";
+const state = {
+  track: [],   // échantillons continus : {lat, lon, acc, alt, t, angle, aspect}
+  points: [],  // waypoints manuels       : {lat, lon, angle, aspect, acc, t}
+};
+
+const tilt = { angle: null, aspect: null, heading: null };  // inclinaison live
+let lastFix = null;       // dernière position connue
+let recording = false;    // enregistrement continu en cours ?
+
+// ---------------------------------------------------------------------------
+// Carte
+// ---------------------------------------------------------------------------
+const map = L.map("map", { zoomControl: false, attributionControl: true })
+  .setView([46.5, 2.5], 5);
+L.control.zoom({ position: "topright" }).addTo(map);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom: 22, maxNativeZoom: 19, attribution: "© OpenStreetMap",
+}).addTo(map);
+
+const trackLayer = L.layerGroup().addTo(map);   // segments colorés par la pente
+const pointsLayer = L.layerGroup().addTo(map);   // waypoints manuels
+let posMarker = null, accCircle = null;
+let autoCenter = true;
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+const $ = (id) => document.getElementById(id);
+const deg = (r) => r * 180 / Math.PI;
+const rad = (d) => d * Math.PI / 180;
+
+function aspectName(az) {
+  if (az == null || isNaN(az)) return "—";
+  const dirs = ["N", "NE", "E", "SE", "S", "SO", "O", "NO"];
+  return dirs[Math.round(((az % 360) + 360) % 360 / 45) % 8];
+}
+
+// Couleur de pente : vert (0°) → rouge (≥25°)
+function slopeColor(a) {
+  if (a == null || isNaN(a)) return "#888";
+  const h = 120 - Math.min(a, 25) / 25 * 120;
+  return `hsl(${h}, 75%, 45%)`;
+}
+
+// Distance haversine (m) entre deux points
+function haversine(a, b) {
+  const R = 6371000, dLat = rad(b.lat - a.lat), dLon = rad(b.lon - a.lon);
+  const s = Math.sin(dLat / 2) ** 2 +
+    Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(s));
+}
+
+function trackDistance() {
+  let d = 0;
+  for (let i = 1; i < state.track.length; i++) d += haversine(state.track[i - 1], state.track[i]);
+  return d;
+}
+
+function fmtDist(m) { return m < 1000 ? Math.round(m) + " m" : (m / 1000).toFixed(2) + " km"; }
+
+function setDot(id, cls) { $(id).className = "dot" + (cls ? " " + cls : ""); }
+
+function updateCounts() {
+  $("ptVal").textContent = state.track.length;
+  $("distVal").textContent = fmtDist(trackDistance());
+  const has = state.track.length || state.points.length;
+  $("export").disabled = !has;
+  $("clear").disabled = !has;
+}
+
+// ---------------------------------------------------------------------------
+// Persistance (localStorage de secours)
+// ---------------------------------------------------------------------------
+function save() {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) {}
+}
+function load() {
+  try {
+    const data = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
+    if (!data) return;
+    if (Array.isArray(data.track)) state.track = data.track;
+    if (Array.isArray(data.points)) state.points = data.points;
+    redrawAll();
+  } catch (e) {}
+}
+
+function redrawAll() {
+  trackLayer.clearLayers();
+  for (let i = 1; i < state.track.length; i++) drawSegment(state.track[i - 1], state.track[i]);
+  pointsLayer.clearLayers();
+  state.points.forEach(drawWaypoint);
+  updateCounts();
+}
+
+// Trace : segment coloré par la pente du point d'arrivée
+function drawSegment(a, b) {
+  L.polyline([[a.lat, a.lon], [b.lat, b.lon]], {
+    color: slopeColor(b.angle), weight: 5, opacity: .9,
+  }).addTo(trackLayer);
+}
+
+function drawWaypoint(p) {
+  L.circleMarker([p.lat, p.lon], {
+    radius: 7, color: "#fff", weight: 2, fillColor: "#1565c0", fillOpacity: 1,
+  }).addTo(pointsLayer)
+    .bindTooltip(`${p.angle == null ? "?" : p.angle.toFixed(1)}° ${aspectName(p.aspect)}`, {
+      permanent: true, direction: "top", className: "wp-label", offset: [0, -6],
+    });
+}
+
+// ---------------------------------------------------------------------------
+// DeviceOrientation → pente + orientation (téléphone solidaire du chariot)
+// ---------------------------------------------------------------------------
+// Angle de pente = angle entre la normale de l'écran et la verticale :
+//   pente = acos(cos β · cos γ)
+// Direction de descente (plan écran) = projection de la gravité :
+//   d = (-cosβ·sinγ, -sinβ) ; azimut = capBoussole + atan2(dx, dy)
+function onOrientation(ev) {
+  if (ev.beta == null || ev.gamma == null) return;
+  const b = rad(ev.beta), g = rad(ev.gamma);
+
+  const angle = deg(Math.acos(Math.max(-1, Math.min(1, Math.cos(b) * Math.cos(g)))));
+  const dx = -Math.cos(b) * Math.sin(g), dy = -Math.sin(b);
+
+  let aspect = null;
+  const heading = (ev.webkitCompassHeading != null) ? ev.webkitCompassHeading
+    : (ev.alpha != null && ev.absolute ? (360 - ev.alpha) : null);
+  if (heading != null && (Math.abs(dx) > 1e-4 || Math.abs(dy) > 1e-4)) {
+    aspect = ((heading + deg(Math.atan2(dx, dy))) % 360 + 360) % 360;
+  }
+
+  tilt.angle = angle; tilt.aspect = aspect; tilt.heading = heading;
+  $("angleVal").textContent = angle.toFixed(1);
+  $("aspectVal").textContent = aspectName(aspect);
+  setDot("orientDot", "ok");
+}
+
+// ---------------------------------------------------------------------------
+// Geolocation → trace continue
+// ---------------------------------------------------------------------------
+const THROTTLE_MS = 1000;   // ~1 échantillon / s
+let lastSampleT = 0;
+
+function onPosition(pos) {
+  const c = pos.coords;
+  lastFix = { lat: c.latitude, lon: c.longitude, acc: c.accuracy, alt: c.altitude, t: pos.timestamp };
+  const ll = [c.latitude, c.longitude];
+
+  if (!posMarker) {
+    posMarker = L.circleMarker(ll, { radius: 6, color: "#fff", weight: 2, fillColor: "#1e88e5", fillOpacity: 1 }).addTo(map);
+    accCircle = L.circle(ll, { radius: c.accuracy, color: "#1e88e5", weight: 1, fillOpacity: .08 }).addTo(map);
+    map.setView(ll, 19);
+  } else {
+    posMarker.setLatLng(ll);
+    accCircle.setLatLng(ll).setRadius(c.accuracy);
+    if (autoCenter) map.panTo(ll, { animate: true });
+  }
+
+  $("gpsAcc").textContent = "±" + Math.round(c.accuracy) + " m";
+  setDot("gpsDot", c.accuracy <= 10 ? "ok" : (c.accuracy <= 25 ? "warn" : "err"));
+
+  // Enregistrement continu : on échantillonne position + inclinaison du moment
+  if (recording && pos.timestamp - lastSampleT >= THROTTLE_MS) {
+    lastSampleT = pos.timestamp;
+    const sample = {
+      lat: c.latitude, lon: c.longitude, acc: c.accuracy, alt: c.altitude,
+      t: pos.timestamp, angle: tilt.angle, aspect: tilt.aspect,
+    };
+    const prev = state.track[state.track.length - 1];
+    state.track.push(sample);
+    if (prev) drawSegment(prev, sample);
+    updateCounts();
+    save();
+  }
+}
+
+function onPositionError(err) {
+  setDot("gpsDot", "err");
+  $("gpsAcc").textContent = "erreur";
+  flashHint("GPS : " + err.message);
+}
+
+// ---------------------------------------------------------------------------
+// Enregistrement (démarrer / arrêter)
+// ---------------------------------------------------------------------------
+function toggleRecord() {
+  recording = !recording;
+  const btn = $("record");
+  if (recording) {
+    lastSampleT = 0;
+    btn.textContent = "⏹ Arrêter";
+    btn.classList.add("on");
+    setDot("recDot", "rec");
+    $("recState").textContent = "REC";
+    requestWakeLock();
+    flashHint("Enregistrement en cours — promène le chariot sur le terrain.");
+    if (navigator.vibrate) navigator.vibrate(40);
+  } else {
+    btn.textContent = "⏺ Enregistrer";
+    btn.classList.remove("on");
+    setDot("recDot", "ok");
+    $("recState").textContent = "pause";
+    flashHint(`Enregistrement en pause — ${state.track.length} points.`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Marquer un waypoint remarquable
+// ---------------------------------------------------------------------------
+function markPoint() {
+  if (!lastFix) { flashHint("Pas encore de position GPS."); return; }
+  const p = { lat: lastFix.lat, lon: lastFix.lon, angle: tilt.angle, aspect: tilt.aspect, acc: lastFix.acc, t: Date.now() };
+  state.points.push(p);
+  drawWaypoint(p);
+  updateCounts();
+  save();
+  flashHint(`Waypoint ${p.angle == null ? "" : p.angle.toFixed(1) + "° "}enregistré.`);
+  if (navigator.vibrate) navigator.vibrate(30);
+}
+
+let hintTimer = null;
+function flashHint(msg) {
+  $("hint").textContent = msg;
+  clearTimeout(hintTimer);
+  hintTimer = setTimeout(() => { if (!recording) $("hint").textContent = ""; }, 3500);
+}
+
+// ---------------------------------------------------------------------------
+// Export GeoJSON
+// ---------------------------------------------------------------------------
+function toGeoJSON() {
+  const features = [];
+  const angles = state.track.map((p) => p.angle).filter((a) => a != null);
+
+  if (state.track.length >= 2) {
+    features.push({
+      type: "Feature",
+      properties: {
+        type: "trace", points: state.track.length,
+        distance_m: +trackDistance().toFixed(1),
+        pente_min_deg: angles.length ? +Math.min(...angles).toFixed(2) : null,
+        pente_max_deg: angles.length ? +Math.max(...angles).toFixed(2) : null,
+        pente_moy_deg: angles.length ? +(angles.reduce((s, a) => s + a, 0) / angles.length).toFixed(2) : null,
+      },
+      geometry: { type: "LineString", coordinates: state.track.map((p) => [p.lon, p.lat]) },
+    });
+  }
+
+  // Un point par échantillon (porte la pente → symbolisable dans QGIS)
+  state.track.forEach((p) => features.push({
+    type: "Feature",
+    properties: {
+      type: "echantillon",
+      angle_deg: p.angle == null ? null : +p.angle.toFixed(2),
+      orientation_deg: p.aspect == null ? null : +p.aspect.toFixed(1),
+      orientation: aspectName(p.aspect),
+      alt_m: p.alt == null ? null : +p.alt.toFixed(1),
+      gps_acc_m: p.acc == null ? null : +p.acc.toFixed(1),
+      timestamp: new Date(p.t).toISOString(),
+    },
+    geometry: { type: "Point", coordinates: [p.lon, p.lat] },
+  }));
+
+  // Waypoints manuels
+  state.points.forEach((p) => features.push({
+    type: "Feature",
+    properties: {
+      type: "marque",
+      angle_deg: p.angle == null ? null : +p.angle.toFixed(2),
+      orientation_deg: p.aspect == null ? null : +p.aspect.toFixed(1),
+      orientation: aspectName(p.aspect),
+      gps_acc_m: p.acc == null ? null : +p.acc.toFixed(1),
+      timestamp: new Date(p.t).toISOString(),
+    },
+    geometry: { type: "Point", coordinates: [p.lon, p.lat] },
+  }));
+
+  return { type: "FeatureCollection", features };
+}
+
+function exportGeoJSON() {
+  const blob = new Blob([JSON.stringify(toGeoJSON(), null, 2)], { type: "application/geo+json" });
+  const url = URL.createObjectURL(blob);
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+  const a = document.createElement("a");
+  a.href = url; a.download = `carto-pentes-${stamp}.geojson`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+// ---------------------------------------------------------------------------
+// Wake Lock (garder l'écran allumé)
+// ---------------------------------------------------------------------------
+let wakeLock = null;
+async function requestWakeLock() {
+  if (!("wakeLock" in navigator)) { setDot("lockDot", "warn"); return; }
+  try {
+    wakeLock = await navigator.wakeLock.request("screen");
+    setDot("lockDot", "ok");
+    wakeLock.addEventListener("release", () => { wakeLock = null; setDot("lockDot", "warn"); });
+  } catch (e) { setDot("lockDot", "err"); }
+}
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && wakeLock === null && recording) requestWakeLock();
+});
+
+// ---------------------------------------------------------------------------
+// Démarrage (clic explicite requis par iOS)
+// ---------------------------------------------------------------------------
+async function start() {
+  $("start").disabled = true;
+  $("hint").textContent = "Activation…";
+
+  // 1) Capteurs de mouvement (autorisation explicite iOS 13+)
+  try {
+    if (typeof DeviceOrientationEvent !== "undefined" &&
+        typeof DeviceOrientationEvent.requestPermission === "function") {
+      const res = await DeviceOrientationEvent.requestPermission();
+      if (res !== "granted") throw new Error("orientation refusée");
+    }
+    window.addEventListener("deviceorientation", onOrientation, true);
+  } catch (e) {
+    setDot("orientDot", "err");
+    flashHint("Inclinaison indisponible : " + e.message);
+  }
+
+  // 2) Géolocalisation en continu
+  if ("geolocation" in navigator) {
+    navigator.geolocation.watchPosition(onPosition, onPositionError, {
+      enableHighAccuracy: true, maximumAge: 0, timeout: 15000,
+    });
+  } else {
+    onPositionError({ message: "non supportée" });
+  }
+
+  requestWakeLock();
+
+  $("enableBtn").style.display = "none";
+  $("overlay").style.display = "none";
+  $("legend").style.display = "block";
+  $("record").disabled = false;
+  $("mark").disabled = false;
+  $("center").disabled = false;
+  setDot("recDot", "ok");
+  $("recState").textContent = "prêt";
+  updateCounts();
+  $("hint").textContent = "Pose l'iPhone à plat sur le chariot, puis appuie sur Enregistrer.";
+}
+
+// ---------------------------------------------------------------------------
+// Câblage UI
+// ---------------------------------------------------------------------------
+$("start").addEventListener("click", start);
+$("record").addEventListener("click", toggleRecord);
+$("mark").addEventListener("click", markPoint);
+$("export").addEventListener("click", exportGeoJSON);
+$("center").addEventListener("click", () => {
+  autoCenter = true;
+  if (lastFix) map.setView([lastFix.lat, lastFix.lon], Math.max(map.getZoom(), 19));
+});
+$("clear").addEventListener("click", () => {
+  if (!confirm("Effacer la trace et tous les waypoints ?")) return;
+  state.track = []; state.points = []; lastSampleT = 0;
+  redrawAll(); save();
+  flashHint("Données effacées.");
+});
+map.on("dragstart", () => { autoCenter = false; });
+
+load();
+updateCounts();
+</script>
+</body>
+</html>

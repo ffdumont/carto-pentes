@@ -2,3 +2,12 @@
 node_modules/
 *.log
 .vscode/
+
+# Certificat auto-signé du serveur de dev (serve.py)
+.devcert.pem
+.devkey.pem
+carto-pentes-ca.cer
+
+# Python
+__pycache__/
+.venv/
