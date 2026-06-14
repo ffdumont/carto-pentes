@@ -172,6 +172,9 @@
 
   <div class="row">
     <button class="ghost" id="zero" disabled>⊙ Zéro</button>
+    <button class="ghost" id="mount" disabled>⟳ Avant</button>
+  </div>
+  <div class="row">
     <button class="ghost" id="mark" disabled>⚑ Marquer</button>
     <button class="ghost" id="center" disabled>⌖ Centrer</button>
   </div>
@@ -204,6 +207,20 @@ let recording = false;    // enregistrement continu en cours ?
 // Après un appui sur « Zéro » : l'orientation de montage courante devient le 0°.
 let zeroG = [0, 0, -1];
 let lastG = null;         // dernier vecteur gravité mesuré (pour la tare)
+
+// Orientation de montage : rotation horaire de l'« avant » du châssis depuis le
+// haut portrait (+Y). 0=haut, 90=droite (paysage), 180=bas, 270=gauche. Réglée
+// manuellement via ⟳ Avant car le verrou de rotation iOS fausse la détection auto.
+let mountRot = 90;
+const MOUNT_LABEL = { 0: "↑ haut (portrait)", 90: "→ droite (paysage)", 180: "↓ bas", 270: "← gauche (paysage)" };
+function saveMount() { try { localStorage.setItem("carto-pentes:mount", String(mountRot)); } catch (e) {} }
+function loadMount() { const v = parseInt(localStorage.getItem("carto-pentes:mount"), 10); if ([0, 90, 180, 270].includes(v)) mountRot = v; }
+function cycleMount() {
+  mountRot = (mountRot + 90) % 360;
+  saveMount();
+  flashHint("Avant du châssis : " + MOUNT_LABEL[mountRot] + " — règle jusqu'à ce que Cap et Tangage soient justes.");
+  if (navigator.vibrate) navigator.vibrate(20);
+}
 
 // ---------------------------------------------------------------------------
 // Carte
@@ -329,29 +346,21 @@ function gravityVec(betaDeg, gammaDeg) {
 const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const clamp1 = (x) => Math.max(-1, Math.min(1, x));
 
-// Écran en paysage ? (détermine quel axe de l'appareil est « l'avant » du châssis)
-function isLandscape() {
-  const t = (screen.orientation && screen.orientation.type) || "";
-  if (t) return /landscape/.test(t);
-  if (typeof window.orientation === "number") return Math.abs(window.orientation) === 90;
-  return window.innerWidth > window.innerHeight;
-}
-
 function onOrientation(ev) {
   if (ev.beta == null || ev.gamma == null) return;
   const g = gravityVec(ev.beta, ev.gamma);
   lastG = g;
   const d = zeroG;
 
-  // Axe « avant » du châssis : paysage → petit côté (X, sens de marche) ;
-  // portrait → grand côté (Y). Projeté ⟂ d ; repli sur l'autre axe si presque vertical.
-  const land = isLandscape();
-  let base = land ? [1, 0, 0] : [0, 1, 0];
+  // Axe « avant » du châssis : direction réglée par ⟳ Avant (mountRot), dans le
+  // plan de l'écran, projetée ⟂ d. Repli sur l'axe latéral si l'avant est ~vertical.
+  const th = rad(mountRot);
+  let base = [Math.sin(th), Math.cos(th), 0];
   let bd = dot3(base, d);
   let fwd = [base[0] - bd * d[0], base[1] - bd * d[1], base[2] - bd * d[2]];
   let fl = Math.hypot(fwd[0], fwd[1], fwd[2]);
   if (fl < 0.2) {
-    base = land ? [0, 1, 0] : [1, 0, 0]; bd = dot3(base, d);
+    base = [Math.cos(th), -Math.sin(th), 0]; bd = dot3(base, d);
     fwd = [base[0] - bd * d[0], base[1] - bd * d[1], base[2] - bd * d[2]];
     fl = Math.hypot(fwd[0], fwd[1], fwd[2]);
   }
@@ -620,12 +629,13 @@ async function start() {
   $("legend").style.display = "block";
   $("record").disabled = false;
   $("zero").disabled = false;
+  $("mount").disabled = false;
   $("mark").disabled = false;
   $("center").disabled = false;
   setDot("recDot", "ok");
   $("recState").textContent = "prêt";
   updateCounts();
-  $("hint").textContent = "Pose le chariot à plat dans sa position de montage, appuie sur ⊙ Zéro pour caler le niveau, puis Enregistrer.";
+  $("hint").textContent = "Règle ⟳ Avant selon ton montage, pose le chariot à plat, ⊙ Zéro, puis Enregistre.";
 }
 
 // ---------------------------------------------------------------------------
@@ -634,6 +644,7 @@ async function start() {
 $("start").addEventListener("click", start);
 $("record").addEventListener("click", toggleRecord);
 $("zero").addEventListener("click", tareZero);
+$("mount").addEventListener("click", cycleMount);
 $("mark").addEventListener("click", markPoint);
 $("export").addEventListener("click", exportGeoJSON);
 $("center").addEventListener("click", () => {
@@ -651,6 +662,7 @@ map.on("dragstart", () => { autoCenter = false; });
 window.addEventListener("resize", () => setTimeout(() => map.invalidateSize(), 150));
 
 load();
+loadMount();
 if (loadZero()) $("calibChip").style.display = "";
 updateCounts();
 </script>
