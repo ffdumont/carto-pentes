@@ -24,9 +24,13 @@ La pente « en marchant » téléphone à la main n'est pas fiable : le capteur 
 → **Approche retenue :** monter l'iPhone **à plat sur un chariot à roues** solidaire du sol. Le téléphone épouse alors l'inclinaison du terrain, et on **enregistre en continu** :
 
 1. **Trace GPS en continu** (`watchPosition`, ~1 point/s) pendant qu'on promène le chariot.
-2. **Pente + orientation échantillonnées à chaque point GPS** : chaque échantillon fige `{lat, lon, angle, orientation, alt, précision, t}`.
+2. **Pente + orientation + cap échantillonnés à chaque point GPS** : chaque échantillon fige `{lat, lon, angle, orientation (azimut de descente), cap, alt, précision, t}`.
 
-L'appli affiche le tracé **coloré par la pente** en direct (vert → rouge) et exporte un GeoJSON (trace + un point par échantillon, symbolisable dans QGIS). Un bouton « Marquer » permet aussi des waypoints ponctuels remarquables.
+**Calibration « Zéro » (tare).** L'angle est mesuré comme l'**écart à une orientation de référence** (produit scalaire des vecteurs gravité), pas par rapport au plan horizontal absolu. On pose donc le chariot à plat dans sa **position de montage réelle** (téléphone à plat, en paysage, ou posé sur la tranche comme un niveau à bulle) et on appuie sur **⊙ Zéro** : cette pose devient 0°. La référence est persistée (`localStorage`).
+
+Le **cap** (boussole) est enregistré en plus de la pente : position + pente + azimut de descente + cap permettront de **reconstruire la surface en 3D** (intégration du gradient le long du parcours).
+
+L'appli affiche le tracé **coloré par la pente** en direct (vert → rouge) et exporte un GeoJSON (trace + un point par échantillon, symbolisable dans QGIS). Un bouton « Marquer » permet aussi des waypoints ponctuels remarquables. Mise en page adaptée **portrait et paysage** (panneau latéral en paysage pour ne pas masquer la carte).
 
 Variante antérieure (abandonnée) : capture ponctuelle « on s'arrête, on pose le téléphone, on mesure » — remplacée par l'enregistrement continu sur chariot, plus rapide et plus dense.
 

@@ -38,8 +38,8 @@
   }
   .chip {
     background: rgba(22,32,27,.92); border: 1px solid #2c3a32; border-radius: 999px;
-    padding: 5px 10px; font-size: 12px; line-height: 1; color: var(--muted);
-    backdrop-filter: blur(6px); display: flex; align-items: center; gap: 5px;
+    padding: 4px 8px; font-size: 11px; line-height: 1; color: var(--muted);
+    backdrop-filter: blur(6px); display: flex; align-items: center; gap: 4px;
   }
   .chip b { color: var(--text); font-variant-numeric: tabular-nums; }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: #555; flex: none; }
@@ -102,6 +102,26 @@
   #legend .bar { height: 8px; width: 110px; border-radius: 4px; margin: 3px 0;
     background: linear-gradient(90deg, hsl(120,75%,45%), hsl(60,75%,45%), hsl(30,75%,45%), hsl(0,75%,45%)); }
   #legend .scale { display: flex; justify-content: space-between; }
+
+  /* Paysage : la carte ne doit pas être masquée → panneau de contrôle à droite,
+     bandeau d'état en colonne compacte à gauche, carte au centre. */
+  @media (orientation: landscape) {
+    body { flex-direction: row; }
+    #panel {
+      width: 224px; flex: none; border-top: none; border-left: 1px solid #233029;
+      overflow-y: auto;
+      padding: 8px 10px calc(8px + var(--safe-bottom)) 10px;
+    }
+    .live { grid-template-columns: 1fr 1fr 1fr; }
+    .live .val { font-size: 22px; }
+    button { padding: 12px 8px; }
+    button.rec { padding: 14px 8px; }
+    #status {
+      flex-direction: column; align-items: flex-start; flex-wrap: nowrap;
+      left: 8px; right: auto; max-width: 44%;
+    }
+    #legend { left: 8px; right: auto; bottom: 8px; }
+  }
 </style>
 </head>
 <body>
@@ -119,6 +139,7 @@
   <span class="chip"><span class="dot" id="gpsDot"></span>GPS <b id="gpsAcc">—</b></span>
   <span class="chip"><span class="dot" id="orientDot"></span>Inclin.</span>
   <span class="chip"><span class="dot" id="lockDot"></span>Écran</span>
+  <span class="chip" id="calibChip" style="display:none">⊙ calé</span>
 </div>
 
 <div id="map"></div>
@@ -149,6 +170,7 @@
   <div class="hint" id="hint">En attente d'activation…</div>
 
   <div class="row">
+    <button class="ghost" id="zero" disabled>⊙ Zéro</button>
     <button class="ghost" id="mark" disabled>⚑ Marquer</button>
     <button class="ghost" id="center" disabled>⌖ Centrer</button>
   </div>
@@ -175,6 +197,12 @@ const state = {
 const tilt = { angle: null, aspect: null, heading: null };  // inclinaison live
 let lastFix = null;       // dernière position connue
 let recording = false;    // enregistrement continu en cours ?
+
+// Orientation de référence (tare). Vecteur gravité (repère appareil) qui
+// correspond au « niveau 0° ». Par défaut : téléphone à plat écran vers le haut.
+// Après un appui sur « Zéro » : l'orientation de montage courante devient le 0°.
+let zeroG = [0, 0, -1];
+let lastG = null;         // dernier vecteur gravité mesuré (pour la tare)
 
 // ---------------------------------------------------------------------------
 // Carte
@@ -280,21 +308,36 @@ function drawWaypoint(p) {
 // ---------------------------------------------------------------------------
 // DeviceOrientation → pente + orientation (téléphone solidaire du chariot)
 // ---------------------------------------------------------------------------
-// Angle de pente = angle entre la normale de l'écran et la verticale :
-//   pente = acos(cos β · cos γ)
-// Direction de descente (plan écran) = projection de la gravité :
-//   d = (-cosβ·sinγ, -sinβ) ; azimut = capBoussole + atan2(dx, dy)
+// Vecteur gravité dans le repère de l'appareil (unitaire) à partir de β/γ.
+// À plat écran vers le haut : (0, 0, -1).
+function gravityVec(betaDeg, gammaDeg) {
+  const b = rad(betaDeg), g = rad(gammaDeg);
+  return [-Math.cos(b) * Math.sin(g), -Math.sin(b), -Math.cos(b) * Math.cos(g)];
+}
+
+// La pente est l'écart angulaire entre l'orientation courante et l'orientation
+// de référence `zeroG` (tare). Indépendant de l'orientation de l'écran : marche
+// que le téléphone soit à plat, en paysage ou posé sur la tranche (niveau à bulle).
+//   pente = acos( g · zeroG )
+// Par défaut zeroG = (0,0,-1) → équivaut à acos(cosβ·cosγ) (référence « à plat ».)
 function onOrientation(ev) {
   if (ev.beta == null || ev.gamma == null) return;
-  const b = rad(ev.beta), g = rad(ev.gamma);
+  const g = gravityVec(ev.beta, ev.gamma);
+  lastG = g;
 
-  const angle = deg(Math.acos(Math.max(-1, Math.min(1, Math.cos(b) * Math.cos(g)))));
-  const dx = -Math.cos(b) * Math.sin(g), dy = -Math.sin(b);
+  const dot = Math.max(-1, Math.min(1, g[0] * zeroG[0] + g[1] * zeroG[1] + g[2] * zeroG[2]));
+  const angle = deg(Math.acos(dot));
+
+  // Direction de descente : composante de la gravité dans le plan du « pont »
+  // (perpendiculaire à l'axe de référence u = -zeroG), ramenée à un azimut via la boussole.
+  const u = [-zeroG[0], -zeroG[1], -zeroG[2]];
+  const gu = g[0] * u[0] + g[1] * u[1] + g[2] * u[2];
+  const dx = g[0] - gu * u[0], dy = g[1] - gu * u[1];
 
   let aspect = null;
   const heading = (ev.webkitCompassHeading != null) ? ev.webkitCompassHeading
     : (ev.alpha != null && ev.absolute ? (360 - ev.alpha) : null);
-  if (heading != null && (Math.abs(dx) > 1e-4 || Math.abs(dy) > 1e-4)) {
+  if (heading != null && (Math.abs(dx) > 1e-3 || Math.abs(dy) > 1e-3)) {
     aspect = ((heading + deg(Math.atan2(dx, dy))) % 360 + 360) % 360;
   }
 
@@ -302,6 +345,25 @@ function onOrientation(ev) {
   $("angleVal").textContent = angle.toFixed(1);
   $("aspectVal").textContent = aspectName(aspect);
   setDot("orientDot", "ok");
+}
+
+// Tare : l'orientation courante devient le « niveau 0° ».
+function tareZero() {
+  if (!lastG) { flashHint("Capteur d'inclinaison pas encore prêt."); return; }
+  zeroG = lastG.slice();
+  saveZero();
+  $("calibChip").style.display = "";
+  flashHint("Niveau calé à 0° pour cette position de montage.");
+  if (navigator.vibrate) navigator.vibrate([20, 40, 20]);
+}
+
+function saveZero() { try { localStorage.setItem("carto-pentes:zero", JSON.stringify(zeroG)); } catch (e) {} }
+function loadZero() {
+  try {
+    const z = JSON.parse(localStorage.getItem("carto-pentes:zero") || "null");
+    if (Array.isArray(z) && z.length === 3) { zeroG = z; return true; }
+  } catch (e) {}
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -333,7 +395,7 @@ function onPosition(pos) {
     lastSampleT = pos.timestamp;
     const sample = {
       lat: c.latitude, lon: c.longitude, acc: c.accuracy, alt: c.altitude,
-      t: pos.timestamp, angle: tilt.angle, aspect: tilt.aspect,
+      t: pos.timestamp, angle: tilt.angle, aspect: tilt.aspect, heading: tilt.heading,
     };
     const prev = state.track[state.track.length - 1];
     state.track.push(sample);
@@ -423,6 +485,7 @@ function toGeoJSON() {
       angle_deg: p.angle == null ? null : +p.angle.toFixed(2),
       orientation_deg: p.aspect == null ? null : +p.aspect.toFixed(1),
       orientation: aspectName(p.aspect),
+      cap_deg: p.heading == null ? null : +p.heading.toFixed(1),
       alt_m: p.alt == null ? null : +p.alt.toFixed(1),
       gps_acc_m: p.acc == null ? null : +p.acc.toFixed(1),
       timestamp: new Date(p.t).toISOString(),
@@ -508,12 +571,13 @@ async function start() {
   $("overlay").style.display = "none";
   $("legend").style.display = "block";
   $("record").disabled = false;
+  $("zero").disabled = false;
   $("mark").disabled = false;
   $("center").disabled = false;
   setDot("recDot", "ok");
   $("recState").textContent = "prêt";
   updateCounts();
-  $("hint").textContent = "Pose l'iPhone à plat sur le chariot, puis appuie sur Enregistrer.";
+  $("hint").textContent = "Pose le chariot à plat dans sa position de montage, appuie sur ⊙ Zéro pour caler le niveau, puis Enregistrer.";
 }
 
 // ---------------------------------------------------------------------------
@@ -521,6 +585,7 @@ async function start() {
 // ---------------------------------------------------------------------------
 $("start").addEventListener("click", start);
 $("record").addEventListener("click", toggleRecord);
+$("zero").addEventListener("click", tareZero);
 $("mark").addEventListener("click", markPoint);
 $("export").addEventListener("click", exportGeoJSON);
 $("center").addEventListener("click", () => {
@@ -534,8 +599,11 @@ $("clear").addEventListener("click", () => {
   flashHint("Données effacées.");
 });
 map.on("dragstart", () => { autoCenter = false; });
+// Recalcule la taille de la carte au changement d'orientation (évite les tuiles grises)
+window.addEventListener("resize", () => setTimeout(() => map.invalidateSize(), 150));
 
 load();
+if (loadZero()) $("calibChip").style.display = "";
 updateCounts();
 </script>
 </body>
