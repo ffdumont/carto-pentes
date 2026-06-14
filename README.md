@@ -4,12 +4,12 @@ Cartographier les pentes d'un jardin depuis un iPhone, via une page web servie e
 
 ## Principe
 
-Une page web unique, ouverte dans Safari sur iPhone, lit deux capteurs côté client :
+Une page web unique, ouverte dans Safari sur iPhone, lit côté client :
 
-- **Position** — API `Geolocation` (`watchPosition`), trace GPS en continu.
-- **Inclinaison** — API `DeviceOrientation` (`beta`/`gamma`), le téléphone posé à plat sur le sol sert d'inclinomètre.
+- **Position & cap** — API `Geolocation` (`watchPosition`) : trace GPS continue + **cap de déplacement** (`heading`) et vitesse.
+- **Inclinaison** — API `DeviceOrientation` (`beta`/`gamma`) : l'accéléromètre mesure la gravité → inclinaison **absolue** de l'appareil par rapport à l'horizontale, déjà calibrée comme le niveau de l'app Mesure d'Apple (**aucune tare**).
 
-Les mesures sont accumulées dans le navigateur puis exportées en **GeoJSON** (trace + points de pente) pour relecture dans QGIS / Leaflet.
+L'iPhone est monté sur l'**axe de deux roues** (cf. dispositif ci-dessous). Les mesures — dont les **capteurs bruts** — sont accumulées dans le navigateur puis exportées en **GeoJSON** ; le calcul des pentes se fait en **post-traitement** (scripts `uv`, relecture QGIS / Leaflet).
 
 ## Architecture cible
 
@@ -17,22 +17,26 @@ Les mesures sont accumulées dans le navigateur puis exportées en **GeoJSON** (
 - **Hébergement statique HTTPS** (GitHub Pages / Firebase Hosting). HTTPS est obligatoire pour les API capteurs sur iOS.
 - Données stockées en mémoire + `localStorage` de secours, export GeoJSON manuel.
 
-## Mode de capture : enregistrement continu sur chariot (retenu)
+## Dispositif & mode de capture (retenu)
 
 La pente « en marchant » téléphone à la main n'est pas fiable : le capteur mesure le mouvement du téléphone, pas le terrain. L'altitude GPS (±10–20 m) ne permet pas non plus de dériver la pente à l'échelle d'un jardin, et Safari n'expose pas le baromètre.
 
-→ **Approche retenue :** monter l'iPhone **à plat sur un chariot à roues** solidaire du sol. Le téléphone épouse alors l'inclinaison du terrain, et on **enregistre en continu** :
+→ **Dispositif retenu :** iPhone fixé sur l'**axe de deux roues** (espacées ~40 cm — en pratique un **râteau scarificateur monté sur roues**). On **enregistre en continu** en promenant l'engin :
 
-1. **Trace GPS en continu** (`watchPosition`, ~1 point/s) pendant qu'on promène le chariot.
-2. **Pente + orientation + cap échantillonnés à chaque point GPS** : chaque échantillon fige `{lat, lon, angle, orientation (azimut de descente), cap, alt, précision, t}`.
+1. **Trace GPS continue** (`watchPosition`, ~1 point/s) + cap & vitesse de déplacement.
+2. **Capteurs d'inclinaison bruts** (`beta`/`gamma`/`alpha`/cap magnéto) échantillonnés à chaque point GPS, **moyennés sur l'intervalle** (atténue les vibrations) avec leur **écart-type** comme indice de qualité.
 
-**Calibration « Zéro » (tare).** L'angle est mesuré comme l'**écart à une orientation de référence** (produit scalaire des vecteurs gravité), pas par rapport au plan horizontal absolu. On pose donc le chariot à plat dans sa **position de montage réelle** (téléphone à plat, en paysage, ou posé sur la tranche comme un niveau à bulle) et on appuie sur **⊙ Zéro** : cette pose devient 0°. La référence est persistée (`localStorage`).
+**Ce que mesure le dispositif.** Avec deux roues, le **roulis** (basculement autour de l'axe de roulement) mesure de façon fiable la **pente en travers** (perpendiculaire au sens de marche) : les deux roues forment une base de 40 cm. Le **tangage** (autour de l'essieu) n'est **pas** contraint par le sol — l'iPhone tourne librement autour de l'axe — donc **inexploitable**, on l'ignore.
 
-Le **cap** (boussole) est enregistré en plus de la pente : position + pente + azimut de descente + cap permettront de **reconstruire la surface en 3D** (intégration du gradient le long du parcours).
+**Pas de calibration (tare).** L'accéléromètre donne l'inclinaison **absolue** via la gravité. Un éventuel défaut de montage est un **offset constant**, retiré en post-traitement.
 
-L'appli affiche le tracé **coloré par la pente** en direct (vert → rouge) et exporte un GeoJSON (trace + un point par échantillon, symbolisable dans QGIS). Un bouton « Marquer » permet aussi des waypoints ponctuels remarquables. Mise en page adaptée **portrait et paysage** (panneau latéral en paysage pour ne pas masquer la carte).
+**Post-traitement** (à partir des bruts + cap GPS) : extraction de la pente en travers par point, puis
+- carte 2D **heatmap de pente (%)** sur fond OpenStreetMap ;
+- en combinant des passages de **directions croisées** (parcours en **spirale**), reconstruction du **gradient** → pente *max* (toutes directions) et altitude relative.
 
-Variante antérieure (abandonnée) : capture ponctuelle « on s'arrête, on pose le téléphone, on mesure » — remplacée par l'enregistrement continu sur chariot, plus rapide et plus dense.
+L'appli exporte un GeoJSON (trace + un point/échantillon, symbolisable QGIS), affiche en direct le tracé coloré par la pente en travers, et un bouton « Marquer » pose des waypoints. Mise en page **portrait et paysage**.
+
+Variantes abandonnées : capture ponctuelle (« on s'arrête, on pose, on mesure ») ; **tare ⊙ Zéro** ; **sélection manuelle de l'orientation de montage (⟳ Avant)** — toutes remplacées par « capteurs bruts + post-traitement ».
 
 ## Contraintes iOS
 
@@ -43,8 +47,9 @@ Variante antérieure (abandonnée) : capture ponctuelle « on s'arrête, on pose
 
 ## Précision attendue
 
-- GPS horizontal : ~3–5 m en ciel dégagé, dégradé près des bâtiments / sous les arbres.
-- Inclinomètre : ~1° si le téléphone est bien posé à plat.
+- GPS horizontal : ~3–5 m en ciel dégagé, dégradé près des bâtiments / sous les arbres — **facteur limitant** de la résolution spatiale.
+- Inclinomètre : ~1° (capteur fiable) ; la qualité dépend des vibrations (atténuées par moyennage) et de l'alignement de l'axe sur les roues.
+- Cap GPS fiable seulement **en mouvement** (> ~0,4 m/s) : parcourir à allure régulière.
 
 ## Pile technique envisagée
 
@@ -73,6 +78,15 @@ uv run serve.py          # port 8443
 - **MTU réduite** (switches virtuels Hyper-V) : un gros certificat RSA bloquait la poignée TLS sur le réseau → clé **EC P-256** (poignée compacte) pour contourner.
 - Pare-feu Windows : autoriser le port entrant (`New-NetFirewallRule … -LocalPort 8443`).
 
+## Analyse (post-traitement, scripts `uv`)
+
+Sorties générées dans `data/` (ignoré par git). Lancer : `uv run <script> <trace.geojson>`.
+
+- **`heatmap_pentes.py`** — carte 2D **pente en travers (%)** sur fond OSM (HTML Leaflet interactif + PNG), échelle de couleur paramétrable (`--echelle`, défaut 45 %).
+- **`gradient_map.py`** — **pente max** par reconstruction du gradient (roulis multi-directions + cap GPS → moindres carrés par cellule), rendu cellules sur OSM.
+- **`reconstruct3d.py`** — profil / surface 3D par intégration des pentes. *Caduc sur le dispositif 2 roues* (dépend du tangage) ; conservé pour mémoire.
+- **`recalage_ign.py`** — recale un profil sur l'altimétrie **IGN RGE ALTI** (API Géoplateforme ouverte, sans clé).
+
 ## État
 
-🌿 Prototype **enregistrement continu (chariot)** fonctionnel — `index.html` auto-suffisant (Leaflet, trace GPS continue, inclinomètre `DeviceOrientation`, tracé coloré par la pente, waypoints, Wake Lock, export GeoJSON, secours `localStorage`), publié sur GitHub Pages. `serve.py` pour le dev local. Prochaine étape : essai terrain sur le chariot et calibration de l'angle/orientation.
+🌿 Capture fonctionnelle, publiée sur GitHub Pages — `index.html` auto-suffisant (Leaflet, trace GPS + cap/vitesse, inclinomètre absolu, **capteurs bruts loggés**, tracé coloré par la pente en travers, waypoints, Wake Lock, export GeoJSON, secours `localStorage`). `serve.py` pour le dev local HTTPS. Modèle de mesure arrêté (2 roues → roulis fiable, tangage ignoré, pas de tare ; correction en post-traitement). **Prochaine étape : relevé terrain calibré (spirale, directions croisées) avec cette version, puis coder le post-traitement** roulis+cap GPS → pente en travers → heatmap/gradient sur OSM.
