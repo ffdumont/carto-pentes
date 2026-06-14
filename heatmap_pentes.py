@@ -87,6 +87,7 @@ def main():
     ap.add_argument("geojson")
     ap.add_argument("--champ", choices=list(FIELDS), default="roulis",
                     help="grandeur de pente (roulis = travers, fiable sur 2 roues)")
+    ap.add_argument("--offset", default=None, help="offset de montage a retirer (deg) ou 'auto' (mediane)")
     ap.add_argument("--seuil", type=float, default=None, help="seuil d'alerte en %% (cercle noir)")
     ap.add_argument("--echelle", type=float, default=45.0, help="haut de l'echelle de couleur en %% (defaut 45)")
     ap.add_argument("--outdir", default=None)
@@ -102,6 +103,14 @@ def main():
     lat = np.array([f["geometry"]["coordinates"][1] for f in ech])
     lon = np.array([f["geometry"]["coordinates"][0] for f in ech])
     val = np.array([f["properties"].get(FIELDS[args.champ]) or 0.0 for f in ech], float)
+    off = 0.0
+    if args.offset == "auto":
+        off = float(np.median(val))
+    elif args.offset is not None:
+        off = float(args.offset)
+    if off:
+        print(f"Offset retiré       : {off:+.1f}°")
+        val = val - off
     pct = np.tan(np.radians(np.clip(np.abs(val), 0, 89))) * 100.0
     label = LABELS[args.champ]
 
