@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#1b5e20">
+<title>carto-pentes · snapshot</title>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+
+<style>
+  :root {
+    --bg: #0e1512;
+    --panel: #16201b;
+    --accent: #2e7d32;
+    --accent-hi: #43a047;
+    --rec: #c62828;
+    --text: #e8f0ea;
+    --muted: #9bb0a3;
+    --safe-top: env(safe-area-inset-top, 0px);
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  body { display: flex; flex-direction: column; overflow: hidden; }
+
+  #map { flex: 1 1 auto; width: 100%; background: #0a0f0c; }
+  .leaflet-container { background: #0a0f0c; }
+
+  /* Bandeau d'état (haut) */
+  #status {
+    position: absolute; top: calc(var(--safe-top) + 8px); left: 8px; right: 8px;
+    z-index: 1000; display: flex; gap: 6px; flex-wrap: wrap; pointer-events: none;
+  }
+  .chip {
+    background: rgba(22,32,27,.92); border: 1px solid #2c3a32; border-radius: 999px;
+    padding: 4px 8px; font-size: 11px; line-height: 1; color: var(--muted);
+    backdrop-filter: blur(6px); display: flex; align-items: center; gap: 4px;
+  }
+  .chip b { color: var(--text); font-variant-numeric: tabular-nums; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #555; flex: none; }
+  .dot.ok { background: #43a047; }
+  .dot.warn { background: #f9a825; }
+  .dot.err { background: #e53935; }
+
+  /* Panneau de contrôle (bas) */
+  #panel {
+    flex: none; background: var(--panel); border-top: 1px solid #233029;
+    padding: 10px 12px calc(10px + var(--safe-bottom));
+    display: flex; flex-direction: column; gap: 10px;
+  }
+
+  /* Capteurs bruts : ax / ay / az / α */
+  .live { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; text-align: center; }
+  .live .cell { background: #0f1813; border: 1px solid #233029; border-radius: 10px; padding: 6px 2px; }
+  .live .val { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .live .lbl { font-size: 9px; color: var(--muted); margin-top: 2px; text-transform: uppercase; letter-spacing: .03em; }
+
+  /* Résultat du dernier snapshot : pente ° / pente % / orientation */
+  .result { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; text-align: center; }
+  .result .cell { background: #0f1813; border: 1px solid #2c4a36; border-radius: 12px; padding: 10px 4px; }
+  .result .val { font-size: 28px; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1.05; }
+  .result .unit { font-size: 15px; font-weight: 500; color: var(--muted); }
+  .result .lbl { font-size: 10px; color: var(--muted); margin-top: 3px; text-transform: uppercase; letter-spacing: .03em; }
+
+  .row { display: flex; gap: 8px; }
+  button {
+    appearance: none; border: none; border-radius: 12px; color: #fff;
+    font-size: 16px; font-weight: 600; padding: 14px 10px; flex: 1;
+    background: #2a3a31; transition: transform .05s, background .15s; cursor: pointer;
+  }
+  button:active { transform: scale(.97); }
+  button:disabled { opacity: .4; }
+  button.cap { background: var(--accent); font-size: 19px; padding: 18px 10px; }
+  button.cap.busy { background: var(--rec); }
+  button.danger { background: #3a2626; color: #ff9b9b; }
+  button.ghost { background: #1d2722; color: var(--muted); }
+
+  #enableBtn {
+    position: absolute; inset: 0; z-index: 2000; margin: auto; height: max-content;
+    max-width: 320px; align-self: center; display: flex; flex-direction: column;
+    gap: 14px; padding: 28px; background: var(--panel); border-radius: 18px;
+    border: 1px solid #2c3a32; text-align: center;
+  }
+  #enableBtn h1 { margin: 0; font-size: 22px; }
+  #enableBtn p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.5; }
+  #overlay { position: absolute; inset: 0; z-index: 1999; background: rgba(8,12,10,.75); backdrop-filter: blur(2px); }
+
+  .hint { font-size: 12px; color: var(--muted); text-align: center; min-height: 1em; }
+  .hint.warn { color: #f9a825; }
+  .leaflet-control-attribution { font-size: 9px; }
+  .wp-label {
+    background: #1565c0; color: #fff; border-radius: 6px; padding: 1px 5px;
+    font-size: 12px; font-weight: 700; border: 1px solid #fff; white-space: nowrap;
+  }
+
+  #legend {
+    position: absolute; right: 8px; bottom: 8px; z-index: 1000;
+    background: rgba(22,32,27,.92); border: 1px solid #2c3a32; border-radius: 10px;
+    padding: 6px 8px; font-size: 10px; color: var(--muted); pointer-events: none;
+    display: none;
+  }
+  #legend .bar { height: 8px; width: 110px; border-radius: 4px; margin: 3px 0;
+    background: linear-gradient(90deg, hsl(120,75%,45%), hsl(60,75%,45%), hsl(30,75%,45%), hsl(0,75%,45%)); }
+  #legend .scale { display: flex; justify-content: space-between; }
+
+  @media (orientation: landscape) {
+    body { flex-direction: row; }
+    #panel {
+      width: 240px; flex: none; border-top: none; border-left: 1px solid #233029;
+      overflow-y: auto; padding: 8px 10px calc(8px + var(--safe-bottom)) 10px;
+    }
+    .result .val { font-size: 24px; }
+    #status { flex-direction: column; align-items: flex-start; flex-wrap: nowrap; left: 8px; right: auto; max-width: 44%; }
+    #legend { left: 8px; right: auto; bottom: 8px; }
+  }
+</style>
+</head>
+<body>
+
+<div id="overlay"></div>
+<div id="enableBtn">
+  <h1>📐 carto-pentes · snapshot</h1>
+  <p>Pose le téléphone <b>à plat</b> sur la pente (n'importe quelle orientation), tiens-le immobile, puis appuie sur <b>Capturer</b>. On moyenne ~1,5 s de mesures pour sortir la pente et son orientation.</p>
+  <button class="cap" id="start">Activer les capteurs</button>
+  <p style="font-size:12px">iOS demande une autorisation explicite pour la position et les capteurs de mouvement.</p>
+</div>
+
+<div id="status">
+  <span class="chip"><span class="dot" id="gpsDot"></span>GPS <b id="gpsAcc">—</b></span>
+  <span class="chip"><span class="dot" id="motionDot"></span>Capteur <b id="normVal">—</b></span>
+  <span class="chip" id="statsChip">0 snapshot</span>
+</div>
+
+<div id="map"></div>
+<div id="legend">Pente
+  <div class="bar"></div>
+  <div class="scale"><span>0°</span><span>≥25°</span></div>
+</div>
+
+<div id="panel">
+  <!-- Capteurs bruts (gravité), affichés en direct -->
+  <div class="live">
+    <div class="cell"><div class="val" id="axVal">—</div><div class="lbl">ax m/s²</div></div>
+    <div class="cell"><div class="val" id="ayVal">—</div><div class="lbl">ay m/s²</div></div>
+    <div class="cell"><div class="val" id="azVal">—</div><div class="lbl">az m/s²</div></div>
+    <div class="cell"><div class="val" id="alphaVal">—</div><div class="lbl">α °</div></div>
+  </div>
+
+  <!-- Résultat du dernier snapshot -->
+  <div class="result">
+    <div class="cell"><div class="val"><span id="penteDeg">—</span><span class="unit">°</span></div><div class="lbl">Pente max</div></div>
+    <div class="cell"><div class="val"><span id="pentePct">—</span><span class="unit">%</span></div><div class="lbl">Pente max</div></div>
+    <div class="cell"><div class="val" id="orient">—</div><div class="lbl">Orientation</div></div>
+  </div>
+
+  <div class="row">
+    <button class="cap" id="capture" disabled>⏺ Capturer</button>
+  </div>
+  <div class="hint" id="hint">En attente d'activation…</div>
+
+  <div class="row">
+    <button class="ghost" id="center" disabled>⌖ Centrer</button>
+    <button class="ghost" id="export" disabled>⬇︎ Export GeoJSON</button>
+    <button class="danger" id="reset" disabled>RAZ session</button>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+"use strict";
+
+// ---------------------------------------------------------------------------
+// Modèle de mesure (cf. discussion physique) :
+//   L'accéléromètre mesure le vecteur gravité g = (ax, ay, az) dans le repère
+//   du téléphone (au repos, |g| ≈ 9,81 m/s²). La normale à l'écran est l'axe z.
+//   - Pente du plan où repose le téléphone = angle entre la normale et la
+//     verticale = acos(|az| / |g|).  → indépendant de la rotation à plat.
+//   - Orientation (azimut de la plus grande pente) = direction de la composante
+//     horizontale de g dans le plan de l'écran = cap_boussole + atan2(ax, ay).
+//   On pose le téléphone À PLAT, dans n'importe quel sens, et on lit les deux.
+// ---------------------------------------------------------------------------
+
+const STORAGE_KEY = "carto-pentes:snap:v1";
+const CAPTURE_MS = 1500;     // fenêtre de moyennage d'un snapshot
+const G = 9.80665;           // gravité standard (pour le contrôle de sanité)
+
+const state = { snapshots: [] };   // {lat,lon,acc,alt,t,n, ax,ay,az,norm, alpha,compass,
+                                   //  pente_deg,pente_pct, aspect_deg, std_deg}
+
+// Dernières lectures live des capteurs
+const live = { ax: null, ay: null, az: null, norm: null, alpha: null, compass: null };
+let lastFix = null;          // dernière position GPS
+
+// Capture en cours : on empile les échantillons accéléro pendant CAPTURE_MS
+let capturing = false;
+let capSamples = [];         // [{ax,ay,az}, ...]
+
+// ---------------------------------------------------------------------------
+// Carte
+// ---------------------------------------------------------------------------
+const map = L.map("map", { zoomControl: false, attributionControl: true }).setView([46.5, 2.5], 5);
+L.control.zoom({ position: "topright" }).addTo(map);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom: 22, maxNativeZoom: 19, attribution: "© OpenStreetMap",
+}).addTo(map);
+
+const snapLayer = L.layerGroup().addTo(map);
+let posMarker = null, accCircle = null, autoCenter = true;
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+const $ = (id) => document.getElementById(id);
+const deg = (r) => r * 180 / Math.PI;
+const rad = (d) => d * Math.PI / 180;
+const clamp1 = (x) => Math.max(-1, Math.min(1, x));
+
+function aspectName(az) {
+  if (az == null || isNaN(az)) return "—";
+  const dirs = ["N", "NE", "E", "SE", "S", "SO", "O", "NO"];
+  return dirs[Math.round(((az % 360) + 360) % 360 / 45) % 8];
+}
+
+// Couleur de pente : vert (0°) → rouge (≥25°)
+function slopeColor(a) {
+  if (a == null || isNaN(a)) return "#888";
+  const h = 120 - Math.min(a, 25) / 25 * 120;
+  return `hsl(${h}, 75%, 45%)`;
+}
+
+// Moyenne circulaire d'angles en degrés (gère le passage 359→0)
+function circMean(anglesDeg) {
+  let s = 0, c = 0, n = 0;
+  for (const a of anglesDeg) {
+    if (a == null || isNaN(a)) continue;
+    s += Math.sin(rad(a)); c += Math.cos(rad(a)); n++;
+  }
+  if (!n) return null;
+  return ((deg(Math.atan2(s, c)) % 360) + 360) % 360;
+}
+
+function setDot(id, cls) { $(id).className = "dot" + (cls ? " " + cls : ""); }
+
+function updateCounts() {
+  const n = state.snapshots.length;
+  $("statsChip").textContent = n + " snapshot" + (n > 1 ? "s" : "");
+  $("export").disabled = !n;
+  $("reset").disabled = !n;
+}
+
+let hintTimer = null;
+function flashHint(msg, warn) {
+  $("hint").textContent = msg;
+  $("hint").className = "hint" + (warn ? " warn" : "");
+  clearTimeout(hintTimer);
+  hintTimer = setTimeout(() => { $("hint").textContent = ""; $("hint").className = "hint"; }, 4000);
+}
+
+// ---------------------------------------------------------------------------
+// Persistance (localStorage de secours)
+// ---------------------------------------------------------------------------
+function save() { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) {} }
+function load() {
+  try {
+    const data = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
+    if (data && Array.isArray(data.snapshots)) { state.snapshots = data.snapshots; redrawAll(); }
+  } catch (e) {}
+}
+
+function redrawAll() {
+  snapLayer.clearLayers();
+  state.snapshots.forEach(drawSnapshot);
+  updateCounts();
+}
+
+function drawSnapshot(s) {
+  L.circleMarker([s.lat, s.lon], {
+    radius: 8, color: "#fff", weight: 2, fillColor: slopeColor(s.pente_deg), fillOpacity: 1,
+  }).addTo(snapLayer)
+    .bindTooltip(`${s.pente_deg.toFixed(1)}° · ${Math.round(s.pente_pct)}% ${aspectName(s.aspect_deg)}`, {
+      permanent: true, direction: "top", className: "wp-label", offset: [0, -8],
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Capteurs de mouvement
+//   DeviceMotion → accelerationIncludingGravity = vecteur gravité (ax,ay,az)
+//   DeviceOrientation → α (alpha) + cap boussole (webkitCompassHeading)
+// ---------------------------------------------------------------------------
+function onMotion(ev) {
+  const a = ev.accelerationIncludingGravity;
+  if (!a || a.x == null) return;
+  live.ax = a.x; live.ay = a.y; live.az = a.z;
+  live.norm = Math.hypot(a.x, a.y, a.z);
+  if (capturing) capSamples.push({ ax: a.x, ay: a.y, az: a.z });
+
+  $("axVal").textContent = a.x.toFixed(2);
+  $("ayVal").textContent = a.y.toFixed(2);
+  $("azVal").textContent = a.z.toFixed(2);
+  $("normVal").textContent = live.norm.toFixed(2);
+  // Le total doit rester ≈ 9,81 si le téléphone est immobile
+  setDot("motionDot", Math.abs(live.norm - G) < 0.3 ? "ok" : "warn");
+}
+
+function onOrientation(ev) {
+  if (ev.alpha != null) { live.alpha = ev.alpha; $("alphaVal").textContent = Math.round(ev.alpha); }
+  if (ev.webkitCompassHeading != null) live.compass = ev.webkitCompassHeading;
+  else if (ev.alpha != null && ev.absolute) live.compass = (360 - ev.alpha) % 360;
+}
+
+// ---------------------------------------------------------------------------
+// Calcul d'un snapshot à partir des échantillons accumulés
+// ---------------------------------------------------------------------------
+function penteFromVec(ax, ay, az) {
+  const norm = Math.hypot(ax, ay, az);
+  // Angle de la normale (axe z) à la verticale : abs(az) → marche écran ⬆ ou ⬇
+  const deg_ = deg(Math.acos(clamp1(Math.abs(az) / norm)));
+  return deg_;
+}
+
+function finishCapture() {
+  capturing = false;
+  const btn = $("capture");
+  btn.classList.remove("busy");
+  btn.textContent = "⏺ Capturer";
+  btn.disabled = false;
+
+  const n = capSamples.length;
+  if (n < 5) { flashHint("Trop peu de mesures — capteur de mouvement indisponible ?", true); return; }
+
+  // Moyenne du vecteur gravité
+  let sx = 0, sy = 0, sz = 0;
+  for (const s of capSamples) { sx += s.ax; sy += s.ay; sz += s.az; }
+  const ax = sx / n, ay = sy / n, az = sz / n;
+  const norm = Math.hypot(ax, ay, az);
+
+  // Pente moyenne + écart-type de la pente sur la fenêtre (qualité d'immobilité)
+  const pente_deg = penteFromVec(ax, ay, az);
+  let v = 0;
+  for (const s of capSamples) { const d = penteFromVec(s.ax, s.ay, s.az) - pente_deg; v += d * d; }
+  const std_deg = Math.sqrt(v / n);
+  const pente_pct = Math.tan(rad(pente_deg)) * 100;
+
+  // Orientation géographique de la plus grande pente : direction de la composante
+  // horizontale de g dans le plan de l'écran, recalée par la boussole.
+  // atan2(ax, ay) = angle horaire depuis le haut de l'écran (+Y) vers la descente.
+  const compass = live.compass;
+  let aspect_deg = null;
+  if (compass != null && (Math.abs(ax) > 1e-3 || Math.abs(ay) > 1e-3)) {
+    aspect_deg = ((compass + deg(Math.atan2(ax, ay))) % 360 + 360) % 360;
+  }
+
+  // Affichage résultat
+  $("penteDeg").textContent = pente_deg.toFixed(1);
+  $("pentePct").textContent = Math.round(pente_pct);
+  $("orient").textContent = aspect_deg == null ? "—" : aspectName(aspect_deg);
+
+  // Enregistrement (rattaché à la position GPS du moment)
+  if (!lastFix) {
+    flashHint("Pente mesurée mais PAS de position GPS — snapshot non enregistré.", true);
+    return;
+  }
+  const snap = {
+    lat: lastFix.lat, lon: lastFix.lon, acc: lastFix.acc, alt: lastFix.alt, t: Date.now(),
+    n: n, ax: ax, ay: ay, az: az, norm: norm,
+    alpha: live.alpha, compass: compass,
+    pente_deg: pente_deg, pente_pct: pente_pct, aspect_deg: aspect_deg, std_deg: std_deg,
+  };
+  state.snapshots.push(snap);
+  drawSnapshot(snap);
+  updateCounts();
+  save();
+  if (navigator.vibrate) navigator.vibrate(40);
+
+  const q = std_deg > 0.5 ? ` ⚠ instable (±${std_deg.toFixed(1)}°, bouge moins)` : ` (stable, ±${std_deg.toFixed(2)}°)`;
+  flashHint(`Snapshot ${state.snapshots.length} : ${pente_deg.toFixed(1)}° / ${Math.round(pente_pct)}% ${aspectName(aspect_deg)}${q}`, std_deg > 0.5);
+}
+
+function startCapture() {
+  if (capturing) return;
+  if (live.ax == null) { flashHint("Capteur de mouvement pas encore prêt.", true); return; }
+  capturing = true; capSamples = [];
+  const btn = $("capture");
+  btn.classList.add("busy");
+  btn.disabled = true;
+  if (navigator.vibrate) navigator.vibrate(20);
+
+  // Décompte visuel
+  const t0 = Date.now();
+  const tick = setInterval(() => {
+    const left = Math.max(0, CAPTURE_MS - (Date.now() - t0));
+    btn.textContent = `⏱ ${(left / 1000).toFixed(1)} s…`;
+    if (left <= 0) clearInterval(tick);
+  }, 100);
+  setTimeout(() => { clearInterval(tick); finishCapture(); }, CAPTURE_MS);
+}
+
+// ---------------------------------------------------------------------------
+// Géolocalisation (position du snapshot)
+// ---------------------------------------------------------------------------
+function onPosition(pos) {
+  const c = pos.coords;
+  lastFix = { lat: c.latitude, lon: c.longitude, acc: c.accuracy, alt: c.altitude, t: pos.timestamp };
+  const ll = [c.latitude, c.longitude];
+  if (!posMarker) {
+    posMarker = L.circleMarker(ll, { radius: 6, color: "#fff", weight: 2, fillColor: "#1e88e5", fillOpacity: 1 }).addTo(map);
+    accCircle = L.circle(ll, { radius: c.accuracy, color: "#1e88e5", weight: 1, fillOpacity: .08 }).addTo(map);
+    map.setView(ll, 19);
+  } else {
+    posMarker.setLatLng(ll);
+    accCircle.setLatLng(ll).setRadius(c.accuracy);
+    if (autoCenter) map.panTo(ll, { animate: true });
+  }
+  $("gpsAcc").textContent = "±" + Math.round(c.accuracy) + " m";
+  setDot("gpsDot", c.accuracy <= 10 ? "ok" : (c.accuracy <= 25 ? "warn" : "err"));
+}
+
+function onPositionError(err) {
+  setDot("gpsDot", "err");
+  $("gpsAcc").textContent = "erreur";
+  flashHint("GPS : " + err.message, true);
+}
+
+// ---------------------------------------------------------------------------
+// Export GeoJSON (même pipeline que l'app continue)
+// ---------------------------------------------------------------------------
+function toGeoJSON() {
+  const features = state.snapshots.map((s) => ({
+    type: "Feature",
+    properties: {
+      type: "snapshot",
+      pente_deg: +s.pente_deg.toFixed(2),
+      pente_pct: +s.pente_pct.toFixed(1),
+      orientation_deg: s.aspect_deg == null ? null : +s.aspect_deg.toFixed(1),
+      orientation: aspectName(s.aspect_deg),
+      ecart_type_deg: +s.std_deg.toFixed(3),     // qualité (immobilité)
+      n_echantillons: s.n,
+      // Capteurs bruts (vecteur gravité moyen) pour recalcul hors-ligne
+      ax: +s.ax.toFixed(4), ay: +s.ay.toFixed(4), az: +s.az.toFixed(4),
+      norme: +s.norm.toFixed(4),
+      alpha_deg: s.alpha == null ? null : +s.alpha.toFixed(1),
+      compas_deg: s.compass == null ? null : +s.compass.toFixed(1),
+      alt_m: s.alt == null ? null : +s.alt.toFixed(1),
+      gps_acc_m: s.acc == null ? null : +s.acc.toFixed(1),
+      timestamp: new Date(s.t).toISOString(),
+    },
+    geometry: { type: "Point", coordinates: [s.lon, s.lat] },
+  }));
+  return { type: "FeatureCollection", features };
+}
+
+function exportGeoJSON() {
+  const blob = new Blob([JSON.stringify(toGeoJSON(), null, 2)], { type: "application/geo+json" });
+  const url = URL.createObjectURL(blob);
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+  const a = document.createElement("a");
+  a.href = url; a.download = `carto-pentes-snapshot-${stamp}.geojson`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+// ---------------------------------------------------------------------------
+// Démarrage (clic explicite requis par iOS)
+// ---------------------------------------------------------------------------
+async function start() {
+  $("start").disabled = true;
+  $("hint").textContent = "Activation…";
+
+  // Capteurs de mouvement + orientation (autorisations explicites iOS 13+)
+  try {
+    if (typeof DeviceMotionEvent !== "undefined" && typeof DeviceMotionEvent.requestPermission === "function") {
+      const r = await DeviceMotionEvent.requestPermission();
+      if (r !== "granted") throw new Error("mouvement refusé");
+    }
+    window.addEventListener("devicemotion", onMotion, true);
+  } catch (e) { setDot("motionDot", "err"); flashHint("Capteur de mouvement : " + e.message, true); }
+
+  try {
+    if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function") {
+      const r = await DeviceOrientationEvent.requestPermission();
+      if (r === "granted") window.addEventListener("deviceorientation", onOrientation, true);
+    } else {
+      window.addEventListener("deviceorientation", onOrientation, true);
+    }
+  } catch (e) { /* boussole optionnelle : la pente reste mesurable sans */ }
+
+  if ("geolocation" in navigator) {
+    navigator.geolocation.watchPosition(onPosition, onPositionError, {
+      enableHighAccuracy: true, maximumAge: 0, timeout: 15000,
+    });
+  } else { onPositionError({ message: "non supportée" }); }
+
+  $("enableBtn").style.display = "none";
+  $("overlay").style.display = "none";
+  $("legend").style.display = "block";
+  $("capture").disabled = false;
+  $("center").disabled = false;
+  updateCounts();
+  flashHint("Pose le téléphone à plat sur la pente, immobile, puis Capture.");
+  setTimeout(() => map.invalidateSize(), 150);
+}
+
+// ---------------------------------------------------------------------------
+// Câblage UI
+// ---------------------------------------------------------------------------
+$("start").addEventListener("click", start);
+$("capture").addEventListener("click", startCapture);
+$("export").addEventListener("click", exportGeoJSON);
+$("center").addEventListener("click", () => {
+  autoCenter = true;
+  if (lastFix) map.setView([lastFix.lat, lastFix.lon], Math.max(map.getZoom(), 19));
+});
+$("reset").addEventListener("click", () => {
+  if (!confirm("RAZ session : effacer tous les snapshots ?")) return;
+  state.snapshots = [];
+  redrawAll(); save();
+  $("penteDeg").textContent = "—"; $("pentePct").textContent = "—"; $("orient").textContent = "—";
+  flashHint("Session remise à zéro.");
+});
+map.on("dragstart", () => { autoCenter = false; });
+window.addEventListener("resize", () => setTimeout(() => map.invalidateSize(), 150));
+
+load();
+updateCounts();
+</script>
+</body>
+</html>
