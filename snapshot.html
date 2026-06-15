@@ -188,6 +188,7 @@
 const STORAGE_KEY = "carto-pentes:snap:v1";
 const CAPTURE_MS = 1500;     // fenêtre de moyennage d'un snapshot
 const G = 9.80665;           // gravité standard (pour le contrôle de sanité)
+const GPS_MAX_M = 12;        // précision GPS mini pour autoriser une capture (m)
 
 const state = { snapshots: [] };   // {lat,lon,acc,alt,t,n, ax,ay,az,norm, alpha,compass,
                                    //  pente_deg,pente_pct, aspect_deg, std_deg}
@@ -384,6 +385,14 @@ function finishCapture() {
 function startCapture() {
   if (capturing) return;
   if (live.ax == null) { flashHint("Capteur de mouvement pas encore prêt.", true); return; }
+  // Garde-fou GPS : un snapshot mal positionné fausse la carto. On bloque tant
+  // que la réception n'est pas assez précise (cf. erreurs de fin de session).
+  if (!lastFix || lastFix.acc == null) { flashHint("Pas de position GPS — capture bloquée.", true); return; }
+  if (lastFix.acc > GPS_MAX_M) {
+    flashHint(`GPS trop imprécis (±${Math.round(lastFix.acc)} m > ${GPS_MAX_M}) — attends une meilleure réception.`, true);
+    if (navigator.vibrate) navigator.vibrate([30, 40, 30]);
+    return;
+  }
   capturing = true; capSamples = [];
   const btn = $("capture");
   btn.classList.add("busy");
